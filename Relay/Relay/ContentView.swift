@@ -1,59 +1,101 @@
-//
-//  ContentView.swift
-//  Relay
-//
-//  Created by Nicholas Candello on 4/1/26.
-//
-
 import SwiftUI
-import SwiftData
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @State private var browserManager = BrowserManager()
+    @State private var isStarting = false
+    @State private var errorMessage: String?
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
+        VStack(spacing: 0) {
+            // Toolbar
+            HStack {
+                Text("Relay")
+                    .font(.title2.bold())
+
+                Spacer()
+
+                Text("\(browserManager.agents.count) agent(s)")
+                    .foregroundStyle(.secondary)
+
+                if !browserManager.agents.isEmpty {
+                    let avgFPS = browserManager.agents.map(\.fps).reduce(0, +) / Double(max(browserManager.agents.count, 1))
+                    Text("Avg: \(avgFPS, specifier: "%.1f") FPS")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(avgFPS >= 24 ? .green : (avgFPS >= 15 ? .yellow : .red))
                 }
-                .onDelete(perform: deleteItems)
+
+                Button("Add Agent") {
+                    Task { await addAgent() }
+                }
+                .disabled(isStarting || browserManager.agents.count >= 6)
+
+                Button("Stop All") {
+                    Task { await browserManager.stopAll() }
+                }
+                .disabled(browserManager.agents.isEmpty)
             }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-            .toolbar {
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
+            .padding()
+
+            Divider()
+
+            // Grid
+            if browserManager.agents.isEmpty {
+                if !browserManager.isDockerAvailable {
+                    ContentUnavailableView(
+                        "Docker Not Found",
+                        systemImage: "globe.badge.chevron.backward",
+                        description: Text("Install Docker Desktop to use Relay")
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "No Agents Running",
+                        systemImage: "globe",
+                        description: Text("Click \"Add Agent\" to start a browser container")
+                    )
+                }
+            } else {
+                ScrollView {
+                    BrowserGridView(
+                        agents: browserManager.agents,
+                        onCloseAgent: { agent in
+                            Task { await browserManager.stopAgent(agent) }
+                        }
+                    )
                 }
             }
-        } detail: {
-            Text("Select an item")
-        }
-    }
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+            // Error bar
+            if let error = errorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                    Text(error)
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button("Dismiss") { errorMessage = nil }
+                        .buttonStyle(.plain)
+                }
+                .padding()
+                .background(.red.opacity(0.1))
             }
         }
+        .frame(minWidth: 900, minHeight: 600)
+        .task {
+            await browserManager.cleanupStaleContainers()
+        }
+        .onDisappear {
+            Task { await browserManager.stopAll() }
+        }
     }
-}
 
-#Preview {
-    ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+    private func addAgent() async {
+        isStarting = true
+        defer { isStarting = false }
+        do {
+            _ = try await browserManager.startAgent()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }

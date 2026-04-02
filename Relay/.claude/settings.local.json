@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /Users/nicholascandello/Desktop/ramp-intern-hackathon/Relay/README*)",
+      "Read(//Users/nicholascandello/Desktop/ramp-intern-hackathon/**)"
+    ]
+  }
+}
