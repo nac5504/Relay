@@ -30,14 +30,18 @@ struct BrowserStreamView: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
-        webView.load(URLRequest(url: agent.noVNCURL))
+        if let url = agent.noVNCURL {
+            webView.load(URLRequest(url: url))
+        }
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         // Don't reload if already loading or loaded with the correct port
         guard let currentPort = webView.url?.port, currentPort != agent.noVNCPort else { return }
-        webView.load(URLRequest(url: agent.noVNCURL))
+        if let url = agent.noVNCURL {
+            webView.load(URLRequest(url: url))
+        }
     }
 
     func makeCoordinator() -> Coordinator {

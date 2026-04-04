@@ -2,7 +2,7 @@ import Foundation
 
 @Observable
 class BrowserAgent: Identifiable {
-    let id: UUID
+    var id: UUID
     var containerID: String?
     var status: AgentStatus = .starting
     var noVNCPort: Int
@@ -14,14 +14,18 @@ class BrowserAgent: Identifiable {
 
     // Relay agent management fields
     var agentName: String = ""
+    var task: String = ""
     var tasks: [AgentTask] = []
     var relayStatus: RelayAgentStatus = .notStarted
     var chatMessages: [ChatMessage] = []
+    var planMessages: [ChatMessage] = []
     var actionLog: [ActionEvent] = []
     var cost: Double = 0.0
     var sessionId: String = ""
     var waitingForInput: Bool = false
     var startedAt: Date?
+    var planComplete: Bool = false
+    var outputFiles: [String] = []
 
     // Claude agent conversation
     var claudeHistory: [ClaudeService.Message] = []
@@ -44,11 +48,12 @@ class BrowserAgent: Identifiable {
 
     /// Short description of what the agent is doing right now
     var currentTaskName: String {
-        currentTask?.name ?? tasks.last?.name ?? "Idle"
+        currentTask?.name ?? (task.isEmpty ? (tasks.last?.name ?? "Idle") : task)
     }
 
-    var noVNCURL: URL {
-        URL(string: "http://localhost:\(noVNCPort)/vnc.html?autoconnect=true&resize=scale&password=secret&view_only=false&reconnect=true&reconnect_delay=1000&host=localhost&port=\(noVNCPort)&path=websockify&encrypt=false")!
+    var noVNCURL: URL? {
+        guard noVNCPort > 0 else { return nil }
+        return URL(string: "http://localhost:\(noVNCPort)/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000")
     }
 
     var formattedCost: String {
@@ -70,7 +75,12 @@ class BrowserAgent: Identifiable {
         return URL(string: "https://api.dicebear.com/9.x/bottts/png?seed=\(seed)&size=64")
     }
 
-    init(id: UUID = UUID(), noVNCPort: Int, vncPort: Int, seleniumPort: Int, displayName: String) {
+    /// Messages for the current phase (plan or work)
+    var activeMessages: [ChatMessage] {
+        relayStatus.isPlanningPhase ? planMessages : chatMessages
+    }
+
+    init(id: UUID = UUID(), noVNCPort: Int = 0, vncPort: Int = 0, seleniumPort: Int = 0, displayName: String = "") {
         self.id = id
         self.noVNCPort = noVNCPort
         self.vncPort = vncPort
@@ -90,6 +100,22 @@ class BrowserAgent: Identifiable {
         self.tasks = tasks
         self.relayStatus = relayStatus
         self.sessionId = sessionId
+    }
+
+    convenience init(from r: AgentResponse) {
+        self.init(id: UUID(uuidString: r.id) ?? UUID(),
+                  noVNCPort: r.noVNCPort ?? 0,
+                  vncPort: r.vncPort ?? 0,
+                  seleniumPort: 0,
+                  displayName: r.agentName)
+        self.agentName = r.agentName
+        self.task = r.task
+        self.sessionId = r.sessionId
+        self.cost = r.cost
+        self.waitingForInput = r.waitingForInput
+        self.relayStatus = RelayAgentStatus(rawValue: r.status) ?? .starting
+        self.startedAt = Date()
+        if let err = r.error { self.errorMessage = err }
     }
 }
 

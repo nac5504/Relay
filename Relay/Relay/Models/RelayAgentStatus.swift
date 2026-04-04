@@ -3,6 +3,7 @@ import SwiftUI
 enum RelayAgentStatus: String, Codable, CaseIterable {
     case notStarted
     case starting
+    case planning   // container ready, plan agent conversing
     case working
     case waiting
     case completed
@@ -12,7 +13,8 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
     var displayName: String {
         switch self {
         case .notStarted: return "Not Started"
-        case .starting: return "Starting"
+        case .starting: return "Starting..."
+        case .planning: return "Planning"
         case .working: return "Working"
         case .waiting: return "Waiting for Input"
         case .completed: return "Completed"
@@ -24,6 +26,7 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
     var dotColor: Color {
         switch self {
         case .working: return .green
+        case .planning: return .cyan
         case .waiting: return .orange
         case .starting: return .yellow
         case .completed: return .blue
@@ -36,6 +39,7 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
     var iconName: String {
         switch self {
         case .working: return "circle.fill"
+        case .planning: return "text.bubble.fill"
         case .waiting: return "questionmark.circle.fill"
         case .completed: return "checkmark.circle.fill"
         case .error: return "xmark.circle.fill"
@@ -43,5 +47,9 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
         case .stopped: return "stop.circle.fill"
         case .notStarted: return "circle.dashed"
         }
+    }
+
+    var isPlanningPhase: Bool {
+        self == .starting || self == .planning
     }
 }
