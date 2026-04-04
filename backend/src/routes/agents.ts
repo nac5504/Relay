@@ -3,9 +3,12 @@ import { v4 as uuidv4 } from 'uuid';
 import * as registry from '../lib/agentRegistry';
 import * as docker from '../lib/dockerManager';
 import * as claudeLoop from '../lib/claudeLoop';
+import * as planAgent from '../lib/planAgent';
 import * as messageQueue from '../lib/messageQueue';
+import * as recordingManager from '../lib/recordingManager';
 import * as wsHub from '../lib/wsHub';
 import { AgentState } from '../lib/types';
+import { getApiKey, hasApiKey } from '../lib/config';
 
 const router = Router();
 
@@ -45,6 +48,8 @@ router.get('/:id/history', (req: Request, res: Response) => {
 
 // POST /agents
 router.post('/', async (req: Request, res: Response) => {
+  if (!hasApiKey()) return res.status(400).json({ error: 'API key not set. POST /config first.' });
+
   const { task, agentName } = req.body as { task?: string; agentName?: string };
   if (!task) return res.status(400).json({ error: '"task" is required' });
 
@@ -63,6 +68,7 @@ router.post('/', async (req: Request, res: Response) => {
     sessionId,
     cost: 0,
     waitingForInput: false,
+    containerReady: false,
     startedAt: Date.now(),
     messages: [],
     recordingProc: null,
@@ -73,29 +79,58 @@ router.post('/', async (req: Request, res: Response) => {
   res.status(201).json(summarize(agent));
 
   setImmediate(async () => {
+    // 1. Start plan agent immediately (it streams while container boots)
+    planAgent.runPlanAgent(agentId, async (_finalPlan: string) => {
+      // Wait for container to be ready before starting the loop
+      await waitForContainerReady(agentId);
+      const current = registry.get(agentId);
+      if (!current || current.status === 'stopped') return;
+      registry.update(agentId, { status: 'working' });
+      wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: 0 });
+      claudeLoop.runAgentLoop(agentId).catch((err) => {
+        console.error(`[agents] Loop error for ${agentId}:`, err);
+      });
+    }).catch((err) => {
+      console.error(`[agents] Plan agent error for ${agentId}:`, err);
+    });
+
+    // 2. Boot container in background
     try {
       const { containerName, noVNCPort, vncPort } = await docker.startContainer(agentId, sessionId);
       registry.update(agentId, { containerName, noVNCPort, vncPort });
-      wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', noVNCPort, vncPort });
+      wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', noVNCPort, vncPort, cost: 0 });
 
       await docker.waitForReady(noVNCPort);
-      registry.update(agentId, { status: 'working' });
-      wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', noVNCPort, vncPort });
 
-      await claudeLoop.runAgentLoop(agentId);
+      // Start recording now that container is ready
+      const recordingProc = recordingManager.startRecording(containerName, sessionId);
+      registry.update(agentId, { containerReady: true, status: 'planning', recordingProc });
+      wsHub.broadcast({ type: 'agent_update', agentId, status: 'planning', noVNCPort, vncPort, cost: 0 });
     } catch (err) {
-      console.error(`Failed to start agent ${agentId}:`, err);
+      console.error(`[agents] Container start failed for ${agentId}:`, err);
       registry.update(agentId, { status: 'error', error: (err as Error).message });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'error' });
     }
   });
 });
 
+async function waitForContainerReady(agentId: string, timeoutMs = 120_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const agent = registry.get(agentId);
+    if (!agent || agent.status === 'stopped') return;
+    if (agent.containerReady) return;
+    await new Promise<void>((r) => setTimeout(r, 500));
+  }
+  console.warn(`[agents] Container for ${agentId} not ready after ${timeoutMs}ms — proceeding anyway`);
+}
+
 // DELETE /agents/:id
 router.delete('/:id', async (req: Request, res: Response) => {
   const agent = registry.get(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Not found' });
 
+  planAgent.cancelPlanAgent(req.params.id);
   registry.update(req.params.id, { status: 'stopped' });
   messageQueue.clear(req.params.id);
 
@@ -108,7 +143,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
   res.status(204).send();
 });
 
-// POST /agents/:id/message
+// POST /agents/:id/message — routes to plan agent or computer use agent based on status
 router.post('/:id/message', (req: Request, res: Response) => {
   const agent = registry.get(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Not found' });
@@ -116,14 +151,19 @@ router.post('/:id/message', (req: Request, res: Response) => {
   const { text } = req.body as { text?: string };
   if (!text) return res.status(400).json({ error: '"text" is required' });
 
-  messageQueue.setPending(req.params.id, text);
-
-  if (agent.status === 'waiting') {
-    registry.update(req.params.id, { status: 'working', waitingForInput: false });
-    wsHub.broadcast({ type: 'agent_update', agentId: req.params.id, status: 'working', cost: agent.cost });
+  if (agent.status === 'starting' || agent.status === 'planning') {
+    // Route to plan agent
+    planAgent.injectPlanMessage(req.params.id, text);
+  } else {
+    // Route to computer use agent
+    messageQueue.setPending(req.params.id, text);
+    if (agent.status === 'waiting') {
+      registry.update(req.params.id, { status: 'working', waitingForInput: false });
+      wsHub.broadcast({ type: 'agent_update', agentId: req.params.id, status: 'working', cost: agent.cost });
+    }
+    wsHub.broadcast({ type: 'chat_message', agentId: req.params.id, role: 'user', text, timestamp: new Date().toISOString() });
   }
 
-  wsHub.broadcast({ type: 'chat_message', agentId: req.params.id, role: 'user', text, timestamp: new Date().toISOString() });
   res.status(204).send();
 });
 

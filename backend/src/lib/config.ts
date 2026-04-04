@@ -10,3 +10,7 @@ export function getApiKey(): string {
   }
   return apiKey;
 }
+
+export function hasApiKey(): boolean {
+  return apiKey !== null && apiKey.length > 0;
+}
