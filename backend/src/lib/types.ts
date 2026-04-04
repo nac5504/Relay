@@ -1,9 +1,10 @@
 import { ChildProcess } from 'child_process';
 
 export type AgentStatus =
-  | 'starting'
-  | 'working'
-  | 'waiting'
+  | 'starting'   // container booting, plan agent active
+  | 'planning'   // container ready, plan agent still talking
+  | 'working'    // computer use loop running
+  | 'waiting'    // Claude asked for user input
   | 'completed'
   | 'error'
   | 'stopped';
@@ -27,13 +28,13 @@ export interface AgentState {
   sessionId: string;
   cost: number;
   waitingForInput: boolean;
-  startedAt: number; // Date.now()
+  containerReady: boolean;
+  startedAt: number;
   messages: AnthropicMessage[];
   recordingProc: ChildProcess | null;
   error: string | null;
 }
 
-// Minimal shape of Anthropic message used in conversation history
 export interface AnthropicMessage {
   role: 'user' | 'assistant';
   content: AnthropicContentBlock[];

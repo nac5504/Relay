@@ -2,9 +2,10 @@ import { AgentState } from './types';
 
 const registry = new Map<string, AgentState>();
 
-export function create(agentId: string, state: AgentState): AgentState {
-  registry.set(agentId, state);
-  return state;
+export function create(agentId: string, state: Omit<AgentState, 'containerReady'> & { containerReady?: boolean }): AgentState {
+  const full: AgentState = { containerReady: false, ...state } as AgentState;
+  registry.set(agentId, full);
+  return full;
 }
 
 export function get(agentId: string): AgentState | undefined {
