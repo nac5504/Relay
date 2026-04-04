@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B2876E442F80741100048EA6 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = B2876E432F80741100048EA6 /* Kingfisher */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		B2876DC42F7DE9D200048EA6 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B2876E442F80741100048EA6 /* Kingfisher in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = Relay;
 			packageProductDependencies = (
+				B2876E432F80741100048EA6 /* Kingfisher */,
 			);
 			productName = Relay;
 			productReference = B2876DB42F7DE9D100048EA6 /* Relay.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = B2876DAB2F7DE9D100048EA6;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B2876E422F80741100048EA6 /* XCRemoteSwiftPackageReference "Kingfisher" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B2876DB52F7DE9D100048EA6 /* Products */;
 			projectDirPath = "";
@@ -581,6 +590,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		B2876E422F80741100048EA6 /* XCRemoteSwiftPackageReference "Kingfisher" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/onevcat/Kingfisher";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.8.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B2876E432F80741100048EA6 /* Kingfisher */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B2876E422F80741100048EA6 /* XCRemoteSwiftPackageReference "Kingfisher" */;
+			productName = Kingfisher;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B2876DAC2F7DE9D100048EA6 /* Project object */;
 }

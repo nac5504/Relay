@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BrowserTileView: View {
     @Bindable var agent: BrowserAgent
+    var isMentioned: Bool = false
     var onClose: () -> Void
 
     var body: some View {
@@ -70,8 +71,10 @@ struct BrowserTileView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(borderColor, lineWidth: 2)
+                .stroke(isMentioned ? Color.blue : borderColor, lineWidth: isMentioned ? 3 : 2)
         )
+        .shadow(color: isMentioned ? Color.blue.opacity(0.6) : .clear, radius: 16, x: 0, y: 0)
+        .animation(.easeInOut(duration: 0.25), value: isMentioned)
     }
 
     private var fpsColor: Color {
