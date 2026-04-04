@@ -6,17 +6,6 @@ struct MainChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "bubble.left.and.bubble.right")
-                    .font(.system(.callout, design: .monospaced))
-                Text("Chat")
-                    .font(.system(.headline, design: .monospaced))
-                Spacer()
-            }
-            .foregroundStyle(.white.opacity(0.5))
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
@@ -36,6 +25,11 @@ struct MainChatView: View {
                 .onChange(of: store.mainChatMessages.count) { _, _ in
                     if let last = store.mainChatMessages.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+                .onChange(of: store.mainChatMessages.last?.text) { _, _ in
+                    if let last = store.mainChatMessages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
@@ -127,6 +121,7 @@ private struct MessageRow: View {
             Text(coloredText(message.text))
                 .font(.system(.callout, design: .default))
                 .foregroundStyle(.white.opacity(0.9))
+                .textSelection(.enabled)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
@@ -188,6 +183,7 @@ private struct MessageRow: View {
                 Text(coloredText(message.text))
                     .font(.system(.callout, design: .default))
                     .foregroundStyle(.white.opacity(0.8))
+                    .textSelection(.enabled)
             }
 
             Spacer(minLength: 40)
