@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SidebarView: View {
-    let store: MockAgentStore
+    let store: AgentStore
     @State private var showSettings = false
 
     var body: some View {
@@ -124,7 +124,7 @@ private struct SidebarRow: View {
 
 private struct AgentSidebarRow: View {
     let agent: BrowserAgent
-    let store: MockAgentStore
+    let store: AgentStore
     @State private var isExpanded = true
 
     var body: some View {

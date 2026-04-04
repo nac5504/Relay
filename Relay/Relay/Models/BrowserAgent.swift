@@ -48,7 +48,7 @@ class BrowserAgent: Identifiable {
     }
 
     var noVNCURL: URL {
-        URL(string: "http://localhost:\(noVNCPort)/vnc.html?autoconnect=true&resize=scale&password=secret&view_only=false&reconnect=true&reconnect_delay=1000&host=localhost&port=\(noVNCPort)&path=websockify&encrypt=false")!
+        URL(string: "http://localhost:\(noVNCPort)/vnc_lite.html?autoconnect=true&resize=scale&host=localhost&port=\(noVNCPort)&path=websockify")!
     }
 
     var formattedCost: String {

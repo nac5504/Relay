@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var store = MockAgentStore()
+    @State private var store = AgentStore()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showChat = true
 

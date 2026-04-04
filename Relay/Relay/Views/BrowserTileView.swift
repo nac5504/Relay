@@ -37,27 +37,6 @@ struct BrowserTileView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.black.opacity(0.8))
             }
-
-            // Overlay controls
-            VStack(alignment: .trailing, spacing: 4) {
-                // FPS badge
-                Text("\(agent.fps, specifier: "%.0f") FPS")
-                    .font(.system(.caption, design: .monospaced).bold())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.black.opacity(0.7))
-                    .foregroundStyle(fpsColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                
-                // Close button
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(8)
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(

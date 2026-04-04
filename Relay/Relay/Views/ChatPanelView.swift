@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ChatPanelView: View {
     let agent: BrowserAgent
-    let store: MockAgentStore
+    let store: AgentStore
     var onClose: () -> Void
     @State private var inputText = ""
 

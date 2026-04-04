@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct HomeGridView: View {
-    @Bindable var store: MockAgentStore
+    @Bindable var store: AgentStore
 
     var body: some View {
         VStack(spacing: 0) {

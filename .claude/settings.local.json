@@ -5,7 +5,9 @@
       "WebFetch(domain:github.com)",
       "Bash(grep -E \"\\\\.\\(swift|xcodeproj|pbxproj|plist|storyboard|xib|json\\)$\")",
       "WebFetch(domain:www.hackingwithswift.com)",
-      "WebFetch(domain:swiftwithmajid.com)"
+      "WebFetch(domain:swiftwithmajid.com)",
+      "Bash(docker image:*)",
+      "Bash(docker exec:*)"
     ]
   }
 }

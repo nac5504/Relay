@@ -2,7 +2,8 @@ import SwiftUI
 import WebKit
 
 /// Displays a live noVNC stream from a Docker container in a WKWebView.
-/// Mouse and keyboard input is forwarded automatically by noVNC.
+/// Fetches the noVNC page via URLSession (bypassing WKWebView sandbox)
+/// then injects it via loadHTMLString so WebSocket connections work.
 struct BrowserStreamView: NSViewRepresentable {
     let agent: BrowserAgent
     var onFPSUpdate: ((Double) -> Void)?
@@ -10,34 +11,24 @@ struct BrowserStreamView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
 
-        // Auto-reconnect script: monitors noVNC connection state and retries on failure
-        let reconnectScript = WKUserScript(
-            source: Self.autoReconnectJS,
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: true
-        )
-        config.userContentController.addUserScript(reconnectScript)
-
-        // FPS measurement script
-        let fpsScript = WKUserScript(
-            source: Self.fpsMonitorJS,
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: true
-        )
-        config.userContentController.addUserScript(fpsScript)
         config.userContentController.add(context.coordinator, name: "fpsReport")
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
-        webView.load(URLRequest(url: agent.noVNCURL))
+        context.coordinator.webView = webView
+
+        if agent.noVNCPort > 0 {
+            context.coordinator.loadNoVNC(port: agent.noVNCPort)
+        }
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        // Don't reload if already loading or loaded with the correct port
-        guard let currentPort = webView.url?.port, currentPort != agent.noVNCPort else { return }
-        webView.load(URLRequest(url: agent.noVNCURL))
+        guard agent.noVNCPort > 0 else { return }
+        if context.coordinator.currentPort == agent.noVNCPort { return }
+        context.coordinator.loadNoVNC(port: agent.noVNCPort)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -46,9 +37,85 @@ struct BrowserStreamView: NSViewRepresentable {
 
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var onFPSUpdate: ((Double) -> Void)?
+        weak var webView: WKWebView?
+        var currentPort: Int = 0
 
         init(onFPSUpdate: ((Double) -> Void)?) {
             self.onFPSUpdate = onFPSUpdate
+        }
+
+        /// Fetch noVNC HTML via URLSession, then inject into WebView
+        func loadNoVNC(port: Int) {
+            currentPort = port
+            let baseURL = URL(string: "http://localhost:\(port)")!
+            let pageURL = baseURL.appendingPathComponent("vnc_lite.html")
+
+            Task {
+                do {
+                    // Fetch the HTML ourselves (not through the sandboxed WebContent)
+                    let (data, _) = try await URLSession.shared.data(from: pageURL)
+                    guard var html = String(data: data, encoding: .utf8) else { return }
+
+                    // Inject connection params into the page
+                    let connectScript = """
+                    <script>
+                    // Override WebUtil.getConfigVar to inject our params
+                    window.addEventListener('load', function() {
+                        // noVNC lite uses URL params — set them via the RFB object
+                        setTimeout(function() {
+                            if (typeof rfb !== 'undefined') {
+                                // Already connected or connecting
+                            }
+                        }, 500);
+                    });
+                    </script>
+                    """
+
+                    // Add autoconnect params to the URL that vnc_lite reads
+                    // vnc_lite.html reads params from the page URL, but since we're
+                    // loading via loadHTMLString, we inject them directly
+                    html = html.replacingOccurrences(
+                        of: "</head>",
+                        with: """
+                        <script>
+                        // Patch WebUtil.getConfigVar for loadHTMLString context
+                        (function() {
+                            const params = {
+                                host: 'localhost',
+                                port: '\(port)',
+                                path: 'websockify',
+                                autoconnect: 'true',
+                                resize: 'scale',
+                                encrypt: 'false'
+                            };
+                            const origGetConfig = window.WebUtil && window.WebUtil.getConfigVar;
+                            if (window.WebUtil) {
+                                window.WebUtil.getConfigVar = function(name, defVal) {
+                                    return params[name] || (origGetConfig ? origGetConfig(name, defVal) : defVal);
+                                };
+                            }
+                            // Also patch URLSearchParams for scripts that use it
+                            const origGet = URLSearchParams.prototype.get;
+                            URLSearchParams.prototype.get = function(name) {
+                                return params[name] || origGet.call(this, name);
+                            };
+                        })();
+                        </script>
+                        </head>
+                        """
+                    )
+
+                    await MainActor.run {
+                        self.webView?.loadHTMLString(html, baseURL: baseURL)
+                    }
+                } catch {
+                    // Retry after delay
+                    try? await Task.sleep(for: .seconds(2))
+                    await MainActor.run {
+                        self.loadNoVNC(port: port)
+                    }
+                }
+            }
         }
 
         nonisolated func userContentController(
@@ -66,56 +133,4 @@ struct BrowserStreamView: NSViewRepresentable {
             // noVNC loaded
         }
     }
-
-    /// Monitors noVNC connection state and forces reconnect on initial failure
-    private static let autoReconnectJS = """
-    (function() {
-        let retryCount = 0;
-        const maxRetries = 20;
-        const retryInterval = 1500;
-
-        function tryConnect() {
-            if (retryCount >= maxRetries) return;
-            // noVNC exposes its UI object on the page
-            const connectBtn = document.getElementById('noVNC_connect_button');
-            const statusEl = document.querySelector('#noVNC_status');
-            const isDisconnected = document.querySelector('.noVNC_status_error') ||
-                                   (statusEl && statusEl.textContent.toLowerCase().includes('disconnect')) ||
-                                   (statusEl && statusEl.textContent.toLowerCase().includes('failed'));
-
-            if (connectBtn && isDisconnected) {
-                retryCount++;
-                connectBtn.click();
-            }
-        }
-
-        // Poll for disconnection/failure and auto-click connect
-        setInterval(tryConnect, retryInterval);
-    })();
-    """
-
-    /// Measures the actual rendering frame rate of the noVNC canvas
-    private static let fpsMonitorJS = """
-    (function() {
-        let frameCount = 0;
-        let lastTime = performance.now();
-
-        function measureFPS() {
-            frameCount++;
-            const now = performance.now();
-            if (now - lastTime >= 1000) {
-                const fps = (frameCount * 1000) / (now - lastTime);
-                try {
-                    window.webkit.messageHandlers.fpsReport.postMessage({
-                        fps: parseFloat(fps.toFixed(1))
-                    });
-                } catch(e) {}
-                frameCount = 0;
-                lastTime = now;
-            }
-            requestAnimationFrame(measureFPS);
-        }
-        requestAnimationFrame(measureFPS);
-    })();
-    """
 }

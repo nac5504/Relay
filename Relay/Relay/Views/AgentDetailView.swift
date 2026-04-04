@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AgentDetailView: View {
     @Bindable var agent: BrowserAgent
-    let store: MockAgentStore
+    let store: AgentStore
     @State private var showChat = false
 
     var body: some View {
