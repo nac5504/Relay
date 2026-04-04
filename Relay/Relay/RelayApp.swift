@@ -2,6 +2,11 @@ import SwiftUI
 
 @main
 struct RelayApp: App {
+    init() {
+        WebSocketManager.shared.connect()
+        Task { await AgentStore.shared.load() }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

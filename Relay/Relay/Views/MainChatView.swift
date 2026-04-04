@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MainChatView: View {
-    let store: MockAgentStore
+    let store: AgentStore
     @State private var inputText = ""
 
     var body: some View {

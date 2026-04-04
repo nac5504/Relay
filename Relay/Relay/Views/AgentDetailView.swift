@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AgentDetailView: View {
     @Bindable var agent: BrowserAgent
-    let store: MockAgentStore
+    let store: AgentStore
     @State private var showChat = false
 
     var body: some View {
@@ -68,11 +68,11 @@ struct AgentDetailView: View {
                     .fill(Color.white.opacity(0.06))
                     .frame(height: 1)
 
-                // Stream area
-                if agent.status == .running && agent.noVNCPort > 0 {
+                // Stream area — show when container has a port
+                if agent.noVNCPort > 0, let _ = agent.noVNCURL {
                     BrowserStreamView(agent: agent, onFPSUpdate: { agent.fps = $0 })
                 } else {
-                    // Mock placeholder
+                    // Loading placeholder
                     ZStack {
                         Color(white: 0.04)
 
@@ -116,15 +116,11 @@ struct AgentDetailView: View {
                                 )
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                            Circle()
-                                .fill(Color.black.opacity(0.6))
-                                .frame(width: 64, height: 64)
-                                .overlay(
-                                    Image(systemName: "play.fill")
-                                        .font(.title)
-                                        .foregroundStyle(.white.opacity(0.7))
-                                        .offset(x: 2)
-                                )
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            Text("Starting container...")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.3))
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

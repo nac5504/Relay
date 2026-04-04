@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct HomeGridView: View {
-    @Bindable var store: MockAgentStore
+    var store: AgentStore
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +39,10 @@ struct HomeGridView: View {
                     onSelectAgent: { agent in
                         store.focusOnAgent(agent)
                     },
-                    selectedAgentId: $store.focusedAgentId
+                    selectedAgentId: Binding(
+                        get: { store.focusedAgentId },
+                        set: { store.focusedAgentId = $0 }
+                    )
                 )
 
                 if store.focusedAgentId != nil {

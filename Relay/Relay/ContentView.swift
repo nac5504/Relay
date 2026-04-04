@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var store = MockAgentStore()
+    private var store: AgentStore { AgentStore.shared }
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showChat = true
 
@@ -17,7 +17,7 @@ struct ContentView: View {
             MainChatView(store: store)
                 .inspectorColumnWidth(min: 280, ideal: 360, max: 440)
         }
-        
+
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {

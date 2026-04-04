@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct SidebarView: View {
-    let store: MockAgentStore
+    let store: AgentStore
     @State private var showSettings = false
+    @State private var showNewAgentSheet = false
+    @State private var newTaskText = ""
+    @State private var isCreating = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +56,25 @@ struct SidebarView: View {
 
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
 
+            // New Task button
+            Button { showNewAgentSheet = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(.body, design: .monospaced))
+                        .frame(width: 20)
+                    Text("New Task")
+                        .font(.system(.callout, design: .monospaced))
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.6))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+
             Button { showSettings = true } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "gearshape")
@@ -69,7 +91,7 @@ struct SidebarView: View {
             .buttonStyle(.plain)
             .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+            .padding(.bottom, 8)
         }
         .background(
             ZStack {
@@ -79,6 +101,47 @@ struct SidebarView: View {
         )
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showNewAgentSheet) {
+            VStack(spacing: 16) {
+                Text("New Agent Task")
+                    .font(.system(.headline, design: .monospaced))
+                    .foregroundStyle(.white)
+
+                TextEditor(text: $newTaskText)
+                    .font(.system(.body, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .frame(height: 120)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white.opacity(0.04))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.1)))
+                    )
+
+                HStack {
+                    Button("Cancel") {
+                        showNewAgentSheet = false
+                        newTaskText = ""
+                    }
+                    Spacer()
+                    Button(isCreating ? "Starting..." : "Create") {
+                        isCreating = true
+                        Task {
+                            try? await store.createAgent(task: newTaskText)
+                            isCreating = false
+                            showNewAgentSheet = false
+                            newTaskText = ""
+                        }
+                    }
+                    .disabled(newTaskText.trimmingCharacters(in: .whitespaces).isEmpty || isCreating)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(24)
+            .frame(width: 420)
+            .background(Color(white: 0.08))
+            .preferredColorScheme(.dark)
         }
         .overlay(
             Rectangle()
@@ -120,12 +183,11 @@ private struct SidebarRow: View {
     }
 }
 
-// MARK: - Agent Row (expandable with tasks)
+// MARK: - Agent Row (expandable)
 
 private struct AgentSidebarRow: View {
     let agent: BrowserAgent
-    let store: MockAgentStore
-    @State private var isExpanded = true
+    let store: AgentStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -138,21 +200,13 @@ private struct AgentSidebarRow: View {
 
                     Text(agent.agentName)
                         .font(.system(.callout, design: .monospaced).weight(.medium))
+                        .lineLimit(1)
 
                     Spacer()
 
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isExpanded.toggle()
-                        }
-                    } label: {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.3))
-                            .frame(width: 16, height: 16)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+                    Circle()
+                        .fill(agent.relayStatus.dotColor)
+                        .frame(width: 8, height: 8)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -165,40 +219,15 @@ private struct AgentSidebarRow: View {
             .buttonStyle(.plain)
             .foregroundStyle(.white.opacity(0.7))
 
-            // Task sub-items
-            if isExpanded {
-                ForEach(agent.tasks) { task in
-                    HStack(spacing: 10) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.caption)
-                            .frame(width: 16)
-                            .foregroundStyle(.white.opacity(0.3))
-
-                        Text(task.name)
-                            .font(.system(.caption, design: .monospaced))
-                            .lineLimit(1)
-
-                        Spacer()
-
-                        Circle()
-                            .fill(dotColor(for: task.status))
-                            .frame(width: 8, height: 8)
-                    }
-                    .padding(.leading, 32)
+            // Task description
+            if !agent.task.isEmpty {
+                Text(agent.task)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .lineLimit(2)
+                    .padding(.leading, 42)
                     .padding(.trailing, 10)
-                    .padding(.vertical, 5)
-                    .foregroundStyle(.white.opacity(0.4))
-                }
             }
-        }
-    }
-
-    private func dotColor(for status: AgentTask.TaskStatus) -> Color {
-        switch status {
-        case .active: return .green
-        case .pending: return .gray
-        case .completed: return .blue
-        case .failed: return .red
         }
     }
 }

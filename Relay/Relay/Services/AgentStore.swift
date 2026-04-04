@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 @Observable
 @MainActor
@@ -10,6 +11,8 @@ final class AgentStore {
 
     var agents: [BrowserAgent] = []
     var focusedAgentId: UUID? = nil
+    var mentionedAgentId: UUID? = nil
+    var mainChatMessages: [ChatMessage] = []
     var isLoading = false
 
     // MARK: - Derived
@@ -35,6 +38,7 @@ final class AgentStore {
         let response = try await APIService.shared.createAgent(task: task, agentName: agentName)
         let agent = BrowserAgent(from: response)
         agents.append(agent)
+        mainChatMessages.append(ChatMessage(role: .assistant, text: "Spawning agent **\(agent.agentName)** — planning your task..."))
     }
 
     func deleteAgent(_ agent: BrowserAgent) async throws {
@@ -47,12 +51,70 @@ final class AgentStore {
         try await APIService.shared.sendMessage(agentId: agent.id.uuidString, text: text)
     }
 
-    func focusOnAgent(_ id: UUID) {
-        focusedAgentId = id
+    // MARK: - Navigation
+
+    func focusOnAgent(_ agent: BrowserAgent) {
+        guard focusedAgentId != agent.id else { return }
+        focusedAgentId = agent.id
     }
 
     func unfocus() {
         focusedAgentId = nil
+    }
+
+    func updateMentionedAgent(from text: String) {
+        guard let atRange = text.range(of: "@"),
+              atRange.lowerBound < text.endIndex else {
+            mentionedAgentId = nil
+            return
+        }
+        let afterAt = String(text[atRange.upperBound...])
+        let name = String(afterAt.prefix(while: { $0.isLetter || $0.isNumber || $0 == "_" }))
+        guard !name.isEmpty else {
+            mentionedAgentId = nil
+            return
+        }
+        mentionedAgentId = agents.first(where: { $0.agentName.lowercased() == name.lowercased() })?.id
+    }
+
+    // MARK: - Main chat commands
+
+    func processMainChatInput(_ rawText: String) async throws {
+        let text = rawText.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+
+        if text.hasPrefix("/summon ") {
+            let remainder = text.dropFirst("/summon ".count).trimmingCharacters(in: .whitespaces)
+            let tokens = remainder.split(separator: " ", maxSplits: 1)
+            let name: String? = tokens.first.map(String.init)
+            let task = tokens.count > 1 ? String(tokens[1]) : remainder
+            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            try await createAgent(task: task, agentName: name)
+        } else if let agent = focusedAgent {
+            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            try await sendMessage(to: agent, text: text)
+        } else if text.hasPrefix("@") {
+            let parts = text.dropFirst().split(separator: " ", maxSplits: 1)
+            let name = parts.first.map(String.init) ?? ""
+            let message = parts.count > 1 ? String(parts[1]) : ""
+            if let agent = agents.first(where: { $0.agentName.lowercased() == name.lowercased() }) {
+                mainChatMessages.append(ChatMessage(role: .user, text: text))
+                if !message.isEmpty {
+                    try await sendMessage(to: agent, text: message)
+                }
+            } else {
+                mainChatMessages.append(ChatMessage(role: .user, text: text))
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "No agent named \"\(name)\". Use /summon \(name) <task>"))
+            }
+        } else {
+            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            if agents.isEmpty {
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "No agents. Use **/summon Name task** to create one."))
+            } else {
+                let names = agents.map { "@\($0.agentName)" }.joined(separator: ", ")
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "Tag an agent: \(names)"))
+            }
+        }
     }
 
     // MARK: - WebSocket mutations
@@ -67,7 +129,6 @@ final class AgentStore {
 
         if streaming, role == "assistant",
            let last = agent.planMessages.last, last.role == .assistant, !last.isLoading {
-            // Append streaming delta to the last assistant message
             agent.planMessages[agent.planMessages.count - 1] = ChatMessage(
                 id: last.id,
                 role: .assistant,

@@ -58,6 +58,10 @@ struct SettingsView: View {
                             Button {
                                 anthropicKey = keyDraft
                                 testConnection()
+                                // Push to backend
+                                Task {
+                                    try? await APIService.shared.setApiKey(keyDraft)
+                                }
                             } label: {
                                 HStack(spacing: 6) {
                                     if isTesting {
