@@ -12,6 +12,7 @@ import * as recordingManager from './recordingManager';
 import * as wsHub from './wsHub';
 import * as docker from './dockerManager';
 import { getApiKey } from './config';
+import * as outputManager from './outputManager';
 import { ComputerToolInput, AnthropicMessage } from './types';
 
 const MODEL = 'claude-sonnet-4-6';
@@ -64,6 +65,9 @@ export async function runAgentLoop(agentId: string): Promise<void> {
     const systemPrompt = `You are controlling a computer to complete the following task: ${agent.task}
 
 After each step, take a screenshot and carefully evaluate if you have achieved the right outcome. Explicitly show your thinking: "I have evaluated step X..." If not correct, try again. Only when you confirm a step was executed correctly should you move on to the next one.
+
+When you produce output files the user should receive (documents, images, spreadsheets, etc.), write their absolute paths to /tmp/relay_outputs.txt inside the container, one path per line. Example:
+  echo "/home/computeruse/report.pdf" >> /tmp/relay_outputs.txt
 
 If you need clarification or reach a decision point requiring user input, say "Waiting for input:" followed by your question and stop.`;
 
@@ -185,6 +189,13 @@ If you need clarification or reach a decision point requiring user input, say "W
           };
           recordingManager.logAction(sessionId, event);
           wsHub.broadcast({ type: 'action', agentId, event });
+          wsHub.broadcast({
+            type: 'chat_message',
+            agentId,
+            role: 'action',
+            text: event.description,
+            timestamp: new Date().toISOString(),
+          });
 
           toolResults.push({
             type: 'tool_result',
@@ -211,6 +222,13 @@ If you need clarification or reach a decision point requiring user input, say "W
           };
           recordingManager.logAction(sessionId, event);
           wsHub.broadcast({ type: 'action', agentId, event });
+          wsHub.broadcast({
+            type: 'chat_message',
+            agentId,
+            role: 'action',
+            text: event.description,
+            timestamp: new Date().toISOString(),
+          });
 
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: output }] });
 
@@ -276,6 +294,18 @@ print("OK")
       await recordingManager.stopRecording(finalAgent.recordingProc, containerName, sessionId);
     }
     recordingManager.saveTimeline(sessionId);
+
+    // Retrieve files the agent marked for output before container is cleaned up
+    try {
+      if (finalAgent?.containerName) {
+        const files = await outputManager.retrieveOutputs(finalAgent.containerName, agentId);
+        if (files.length > 0) {
+          wsHub.broadcast({ type: 'files_ready', agentId, files });
+        }
+      }
+    } catch (err) {
+      console.warn(`[outputs] Retrieval failed: ${(err as Error).message}`);
+    }
 
     const finalStatus = registry.get(agentId)?.status;
     if (finalStatus !== 'stopped' && finalStatus !== 'error') {
