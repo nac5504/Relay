@@ -4,6 +4,7 @@ struct BrowserGridView: View {
     var agents: [BrowserAgent]
     var mentionedAgentId: UUID? = nil
     var onCloseAgent: (BrowserAgent) -> Void
+    var onSelectAgent: (BrowserAgent) -> Void
     @Binding var selectedAgentId: UUID?
 
     private let gap: CGFloat = 10
@@ -27,17 +28,29 @@ struct BrowserGridView: View {
                             isMentioned: mentionedAgentId == agent.id,
                             onClose: { onCloseAgent(agent) }
                         )
+                        .overlay(alignment: .topLeading) {
+                            HStack(spacing: 8) {
+                                CachedAvatarView(url: agent.avatarURL, size: 24)
+                                Text(agent.agentName)
+                                    .font(.system(size: 18, design: .monospaced).weight(.semibold))
+                                    .foregroundStyle(.black.opacity(0.7))
+                            }
+                            .padding(8)
+                            .opacity(isSelected ? 0 : 1)
+                            .animation(.easeOut(duration: 0.15), value: selectedAgentId)
+                        }
                         .frame(width: frame.width, height: frame.height)
-                        .position(x: frame.midX, y: frame.midY)
-                        .opacity(hasSelection && !isSelected ? 0 : 1)
-                        .zIndex(isSelected ? 10 : 0)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             guard selectedAgentId == nil else { return }
-                            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
-                                selectedAgentId = agent.id
-                            }
+                            onSelectAgent(agent)
                         }
+                        .position(x: frame.midX, y: frame.midY)
+                        .animation(.spring(response: 0.55, dampingFraction: 0.82).delay(0.12), value: selectedAgentId)
+                        .scaleEffect(hasSelection && !isSelected ? 0.7 : 1)
+                        .opacity(hasSelection && !isSelected ? 0 : 1)
+                        .animation(.easeOut(duration: 0.2), value: selectedAgentId)
+                        .zIndex(isSelected ? 10 : 0)
                     }
                 }
             }

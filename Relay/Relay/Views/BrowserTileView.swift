@@ -48,16 +48,7 @@ struct BrowserTileView: View {
                     .background(.black.opacity(0.7))
                     .foregroundStyle(fpsColor)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
-
-                // Agent name
-                Text(agent.displayName)
-                    .font(.system(.caption, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.black.opacity(0.7))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-
+                
                 // Close button
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill")

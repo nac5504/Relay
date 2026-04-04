@@ -44,7 +44,9 @@ struct MainChatView: View {
 
             CommandInputView(
                 text: $inputText,
-                placeholder: "@agent task, /summon name task...",
+                placeholder: store.focusedAgent != nil
+                    ? "Message \(store.focusedAgent!.agentName)..."
+                    : "@agent task, /summon name task...",
                 suggestionsProvider: provideSuggestions,
                 onSend: { text in
                     store.mentionedAgentId = nil
@@ -54,6 +56,9 @@ struct MainChatView: View {
         }
         .onChange(of: inputText) { _, newValue in
             store.updateMentionedAgent(from: newValue)
+        }
+        .onChange(of: store.focusedAgentId) { _, _ in
+            inputText = ""
         }
         .background(
             ZStack {
@@ -78,19 +83,20 @@ struct MainChatView: View {
                 }
         } else if trigger.hasPrefix("/") {
             let q = String(trigger.dropFirst()).lowercased()
-            let cmds: [(String, String)] = [
-                ("file", "Attach a file"),
-                ("summon", "Spawn a new agent"),
-                ("stop", "Stop an agent"),
-                ("status", "Check agent status"),
+            let cmds: [(name: String, hint: String, insert: String?)] = [
+                ("file", "Attach a file", nil),
+                ("summon", "Spawn a new agent", nil),
+                ("focus", "Zoom into an agent", "/focus @"),
+                ("stop", "Stop an agent", nil),
+                ("status", "Check agent status", nil),
             ]
             return cmds
-                .filter { q.isEmpty || $0.0.lowercased().hasPrefix(q) }
+                .filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) }
                 .map {
                     AutocompleteSuggestion(
-                        id: "cmd-\($0.0)",
-                        label: "/\($0.0)", hint: $0.1,
-                        color: .cyan, insertText: "/\($0.0)"
+                        id: "cmd-\($0.name)",
+                        label: "/\($0.name)", hint: $0.hint,
+                        color: .cyan, insertText: $0.insert ?? "/\($0.name)"
                     )
                 }
         }
@@ -216,26 +222,56 @@ private struct ThinkingDotsView: View {
 // MARK: - Colored Text Helper
 
 func coloredText(_ text: String) -> AttributedString {
+    // Order matters: bold before italic so ** is matched first
+    let patterns: [(regex: String, style: (inout AttributedString) -> Void)] = [
+        (#"\*\*(.+?)\*\*"#, { $0.font = .system(.callout, design: .default, weight: .semibold) }),
+        (#"\*(.+?)\*"#,     { $0.font = .system(.callout, design: .default).italic() }),
+        (#"`([^`]+)`"#,     { attr in
+            attr.font = .system(.caption, design: .monospaced)
+            attr.backgroundColor = .gray.opacity(0.2)
+        }),
+        (#"@(\w+)"#,        { $0.foregroundColor = .blue }),
+        (#"(/\w+)"#,        { $0.foregroundColor = .cyan }),
+    ]
+
+    struct Span {
+        let range: Range<String.Index>
+        let display: String
+        let apply: (inout AttributedString) -> Void
+    }
+
+    // Collect all styled spans, earliest first
+    var spans: [Span] = []
+    for (pattern, style) in patterns {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+        let nsRange = NSRange(text.startIndex..., in: text)
+        for match in regex.matches(in: text, range: nsRange) {
+            guard let fullRange = Range(match.range, in: text) else { continue }
+            // Use capture group 1 for display text (strips markers), fall back to full match
+            let displayRange = match.numberOfRanges > 1
+                ? Range(match.range(at: 1), in: text) ?? fullRange
+                : fullRange
+            // Skip if overlapping with an earlier span
+            if spans.contains(where: { $0.range.overlaps(fullRange) }) { continue }
+            spans.append(Span(range: fullRange, display: String(text[displayRange]), apply: style))
+        }
+    }
+    spans.sort { $0.range.lowerBound < $1.range.lowerBound }
+
+    // Build attributed string
     var result = AttributedString()
-    let words = text.split(separator: " ", omittingEmptySubsequences: false)
-    for (i, word) in words.enumerated() {
-        var attr = AttributedString(String(word))
-        let w = String(word)
-        if w.hasPrefix("@") && w.count > 1 {
-            attr.foregroundColor = .blue
-        } else if w.hasPrefix("/") && w.count > 1 {
-            attr.foregroundColor = .cyan
-        } else if w.hasPrefix("**") && w.hasSuffix("**") {
-            var clean = w
-            clean.removeFirst(2)
-            clean.removeLast(2)
-            attr = AttributedString(clean)
-            attr.font = .system(.callout, design: .default, weight: .semibold)
+    var cursor = text.startIndex
+    for span in spans {
+        if cursor < span.range.lowerBound {
+            result.append(AttributedString(String(text[cursor..<span.range.lowerBound])))
         }
+        var attr = AttributedString(span.display)
+        span.apply(&attr)
         result.append(attr)
-        if i < words.count - 1 {
-            result.append(AttributedString(" "))
-        }
+        cursor = span.range.upperBound
+    }
+    if cursor < text.endIndex {
+        result.append(AttributedString(String(text[cursor...])))
     }
     return result
 }

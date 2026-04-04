@@ -2,24 +2,15 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var store = MockAgentStore()
-    @State private var selectedAgentId: UUID?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showChat = true
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(
-                store: store,
-                selectedAgentId: $selectedAgentId
-            )
+            SidebarView(store: store)
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 360)
         } detail: {
-            if let agentId = selectedAgentId,
-               let agent = store.agents.first(where: { $0.id == agentId }) {
-                AgentDetailView(agent: agent, store: store)
-            } else {
-                HomeGridView(store: store, selectedAgentId: $selectedAgentId)
-            }
+            HomeGridView(store: store)
         }
         .navigationSplitViewStyle(.balanced)
         .inspector(isPresented: $showChat) {

@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SidebarView: View {
     let store: MockAgentStore
-    @Binding var selectedAgentId: UUID?
     @State private var showSettings = false
 
     var body: some View {
@@ -33,9 +32,9 @@ struct SidebarView: View {
                     SidebarRow(
                         icon: "house",
                         label: "Home",
-                        isSelected: selectedAgentId == nil
+                        isSelected: store.focusedAgentId == nil
                     ) {
-                        selectedAgentId = nil
+                        store.unfocus()
                     }
                     .padding(.top, 8)
 
@@ -43,7 +42,7 @@ struct SidebarView: View {
                     ForEach(store.agents) { agent in
                         AgentSidebarRow(
                             agent: agent,
-                            selectedAgentId: $selectedAgentId
+                            store: store
                         )
                     }
                 }
@@ -125,14 +124,14 @@ private struct SidebarRow: View {
 
 private struct AgentSidebarRow: View {
     let agent: BrowserAgent
-    @Binding var selectedAgentId: UUID?
+    let store: MockAgentStore
     @State private var isExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             // Agent header
             Button {
-                selectedAgentId = agent.id
+                store.focusOnAgent(agent)
             } label: {
                 HStack(spacing: 10) {
                     CachedAvatarView(url: agent.avatarURL, size: 22)
@@ -159,7 +158,7 @@ private struct AgentSidebarRow: View {
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(selectedAgentId == agent.id ? Color.white.opacity(0.08) : Color.clear)
+                        .fill(store.focusedAgentId == agent.id ? Color.white.opacity(0.08) : Color.clear)
                 )
                 .contentShape(Rectangle())
             }

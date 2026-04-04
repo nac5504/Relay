@@ -137,6 +137,7 @@ struct HighlightedTextEditor: NSViewRepresentable {
 struct CommandInputView: View {
     @Binding var text: String
     var placeholder: String = ""
+    var lockedPrefix: String? = nil
     var suggestionsProvider: (String) -> [AutocompleteSuggestion] = { _ in [] }
     var onSend: (String) -> Void = { _ in }
 
@@ -229,7 +230,7 @@ struct CommandInputView: View {
                 HighlightedTextEditor(text: $text, placeholder: placeholder, onFocusChange: { isFocused = $0 })
                     .frame(minHeight: 36, maxHeight: 80)
                     .padding(.top, 8)
-                    .onChange(of: text) { _, new in refreshSuggestions(new) }
+                    .onChange(of: text) { _, new in enforceLockedPrefix(new) ; refreshSuggestions(new) }
 
                 Divider().opacity(0.15)
 
@@ -349,15 +350,22 @@ struct CommandInputView: View {
         guard !t.isEmpty || !attachedImages.isEmpty else { return }
         // Intercept /file command — open file picker instead of sending
         if t.lowercased() == "/file" {
-            text = ""
+            text = lockedPrefix ?? ""
             showSuggestions = false
             pickImages()
             return
         }
-        text = ""
+        text = lockedPrefix ?? ""
         attachedImages = []
         showSuggestions = false
         onSend(t)
+    }
+
+    private func enforceLockedPrefix(_ newText: String) {
+        guard let prefix = lockedPrefix else { return }
+        if !newText.hasPrefix(prefix) {
+            text = prefix
+        }
     }
 
     private func complete(_ item: AutocompleteSuggestion) {
@@ -375,7 +383,7 @@ struct CommandInputView: View {
             words.append(item.insertText)
         }
         text = words.joined(separator: " ")
-        if !text.hasSuffix(" ") { text += " " }
+        if !text.hasSuffix(" ") && !text.hasSuffix("@") { text += " " }
         showSuggestions = false
     }
 
