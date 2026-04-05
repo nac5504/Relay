@@ -163,11 +163,20 @@ final class WebSocketManager: @unchecked Sendable {
 
             case "task_update":
                 guard let agentId = json["agentId"] as? String,
-                      let stepIndex = json["stepIndex"] as? Int,
-                      let completed = json["completed"] as? Bool else { return }
+                      let stepIndex = json["stepIndex"] as? Int else { return }
+                let status = json["status"] as? String ?? "completed"
                 store.updateAgent(id: agentId) { agent in
                     if stepIndex < agent.planSteps.count {
-                        agent.planSteps[stepIndex].isCompleted = completed
+                        if status == "completed" {
+                            agent.planSteps[stepIndex].isCompleted = true
+                            agent.planSteps[stepIndex].isActive = false
+                        } else if status == "active" {
+                            // Clear previous active
+                            for i in 0..<agent.planSteps.count {
+                                agent.planSteps[i].isActive = false
+                            }
+                            agent.planSteps[stepIndex].isActive = true
+                        }
                     }
                 }
 

@@ -561,14 +561,29 @@ struct PlanChecklist: View {
 
             ForEach(steps) { step in
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: step.isCompleted ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 13))
-                        .foregroundStyle(step.isCompleted ? .green : .white.opacity(0.2))
+                    if step.isCompleted {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.green)
+                    } else if step.isActive {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 13, height: 13)
+                    } else {
+                        Image(systemName: "circle")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.2))
+                    }
 
                     Text(step.title)
                         .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(step.isCompleted ? .white.opacity(0.3) : .white.opacity(0.6))
+                        .foregroundStyle(
+                            step.isCompleted ? .white.opacity(0.3) :
+                            step.isActive ? .white.opacity(0.9) :
+                            .white.opacity(0.6)
+                        )
                         .strikethrough(step.isCompleted, color: .white.opacity(0.15))
+                        .fontWeight(step.isActive ? .medium : .regular)
                 }
             }
         }

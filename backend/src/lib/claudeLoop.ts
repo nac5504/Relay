@@ -56,36 +56,59 @@ function parsePlanSteps(planText: string): string[] {
   return steps;
 }
 
-function detectCompletedSteps(text: string, steps: string[], alreadyCompleted: Set<number>): number[] {
+/**
+ * Detect which step the agent is currently working on or has completed.
+ * Returns { active: number | null, completed: number[] }
+ */
+function detectStepProgress(
+  text: string,
+  steps: string[],
+  alreadyCompleted: Set<number>,
+  currentActive: number,
+): { active: number | null; completed: number[] } {
   const lower = text.toLowerCase();
   const completed: number[] = [];
+  let active: number | null = null;
 
-  // Look for "step N" references with positive language
-  const stepRefs = lower.matchAll(/step\s+(\d+)/g);
+  // Find all "step N" references
+  const stepRefs = [...lower.matchAll(/step\s+(\d+)/g)];
+  const mentionedSteps = stepRefs.map(m => parseInt(m[1], 10) - 1).filter(n => n >= 0 && n < steps.length);
+
+  // Positive evaluation words → completion
+  const positiveWords = /correct|done|complete|success|achiev|verified|confirm|moved on|moving on|proceed|finished|accomplished/;
+  // Active/working words → currently working
+  const activeWords = /now|next|start|begin|work on|moving to|proceed to|let me|i'll|i will/;
+
   for (const m of stepRefs) {
-    const stepNum = parseInt(m[1], 10) - 1; // 0-indexed
-    if (stepNum >= 0 && stepNum < steps.length && !alreadyCompleted.has(stepNum)) {
-      // Check for positive evaluation nearby
-      const pos = m.index!;
-      const context = lower.slice(pos, pos + 200);
-      if (context.match(/correct|done|complete|success|achiev|verified|confirm|moved on|moving on|proceed/)) {
-        completed.push(stepNum);
+    const stepIdx = parseInt(m[1], 10) - 1;
+    if (stepIdx < 0 || stepIdx >= steps.length) continue;
+    const pos = m.index!;
+    const context = lower.slice(Math.max(0, pos - 50), pos + 200);
+
+    if (positiveWords.test(context) && !alreadyCompleted.has(stepIdx)) {
+      completed.push(stepIdx);
+    }
+    if (activeWords.test(context) && !alreadyCompleted.has(stepIdx) && !completed.includes(stepIdx)) {
+      active = stepIdx;
+    }
+  }
+
+  // If we detected a new active step higher than current, mark all previous uncompleted steps as done
+  if (active !== null && active > currentActive) {
+    for (let i = currentActive; i < active; i++) {
+      if (!alreadyCompleted.has(i) && !completed.includes(i)) {
+        completed.push(i);
       }
     }
   }
 
-  // Also detect "I have evaluated" pattern
-  if (lower.includes('evaluated') && lower.match(/correct|success|done|moving/)) {
-    const stepMatch = lower.match(/step\s+(\d+)/);
-    if (stepMatch) {
-      const idx = parseInt(stepMatch[1], 10) - 1;
-      if (idx >= 0 && idx < steps.length && !alreadyCompleted.has(idx) && !completed.includes(idx)) {
-        completed.push(idx);
-      }
-    }
+  // If no explicit step reference but positive evaluation, complete the current active step
+  if (mentionedSteps.length === 0 && positiveWords.test(lower) && !alreadyCompleted.has(currentActive)) {
+    completed.push(currentActive);
+    active = currentActive + 1 < steps.length ? currentActive + 1 : null;
   }
 
-  return completed;
+  return { active, completed };
 }
 
 export async function runAgentLoop(agentId: string): Promise<void> {
@@ -139,8 +162,11 @@ If you need clarification, say "Waiting for input:" followed by your question an
     const planSteps = parsePlanSteps(agent.task);
     if (planSteps.length > 0) {
       wsHub.broadcast({ type: 'task_list', agentId, steps: planSteps });
+      // Mark first step as active
+      wsHub.broadcast({ type: 'task_update', agentId, stepIndex: 0, status: 'active' });
     }
     const completedSteps = new Set<number>();
+    let currentActiveStep = 0;
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -206,12 +232,18 @@ If you need clarification, say "Waiting for input:" followed by your question an
         if (block.type === 'text' && block.text.trim()) {
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'assistant', text: block.text, timestamp: new Date().toISOString() });
 
-          // Detect step completions from Claude's evaluation text
+          // Detect step progress from Claude's evaluation text
           if (planSteps.length > 0) {
-            const newlyCompleted = detectCompletedSteps(block.text, planSteps, completedSteps);
-            for (const stepIdx of newlyCompleted) {
+            const progress = detectStepProgress(block.text, planSteps, completedSteps, currentActiveStep);
+            for (const stepIdx of progress.completed) {
               completedSteps.add(stepIdx);
-              wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepIdx, completed: true });
+              wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepIdx, status: 'completed' });
+              console.log(`[loop:${agentId.slice(0,8)}] ✅ Step ${stepIdx + 1} completed`);
+            }
+            if (progress.active !== null && progress.active !== currentActiveStep) {
+              currentActiveStep = progress.active;
+              wsHub.broadcast({ type: 'task_update', agentId, stepIndex: currentActiveStep, status: 'active' });
+              console.log(`[loop:${agentId.slice(0,8)}] 🔄 Now working on step ${currentActiveStep + 1}`);
             }
           }
 

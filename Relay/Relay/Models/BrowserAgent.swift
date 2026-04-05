@@ -140,4 +140,5 @@ struct PlanStep: Identifiable {
     let id: Int // 0-indexed step number
     let title: String
     var isCompleted: Bool = false
+    var isActive: Bool = false
 }
