@@ -72,7 +72,7 @@ When done, state "Task completed." and stop.`;
               properties: {
                 command: { type: 'string', enum: ['view', 'create', 'str_replace', 'insert'] },
                 path: { type: 'string', description: 'Absolute file path' },
-                new_file_text: { type: 'string', description: 'Full file content (for create)' },
+                file_text: { type: 'string', description: 'Full file content (for create)' },
                 old_str: { type: 'string', description: 'String to replace (for str_replace)' },
                 new_str: { type: 'string', description: 'Replacement string' },
                 insert_line: { type: 'number', description: 'Line number to insert after' },
@@ -115,7 +115,12 @@ When done, state "Task completed." and stop.`;
           const input = block.input as { command?: string; restart?: boolean };
           console.log(`[bash:${agentId.slice(0,8)}] 💻 $ ${(input.command ?? 'restart').slice(0, 120)}`);
 
-          const output = await docker.executeBash(containerName, input);
+          let output: string;
+          try {
+            output = await docker.executeBash(containerName, input);
+          } catch (err) {
+            output = `Error: ${(err as Error).message}`;
+          }
           if (output.trim()) console.log(`[bash:${agentId.slice(0,8)}]    → ${output.trim().slice(0, 200)}`);
 
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'action', text: `$ ${(input.command ?? 'restart').slice(0, 80)}`, timestamp: new Date().toISOString() });
@@ -125,7 +130,12 @@ When done, state "Task completed." and stop.`;
           const input = block.input as Record<string, unknown>;
           console.log(`[bash:${agentId.slice(0,8)}] 📝 ${input.command} ${input.path}`);
 
-          const output = await docker.executeTextEditor(containerName, input);
+          let output: string;
+          try {
+            output = await docker.executeTextEditor(containerName, input);
+          } catch (err) {
+            output = `Error: ${(err as Error).message}`;
+          }
           if (output.trim()) console.log(`[bash:${agentId.slice(0,8)}]    → ${output.trim().slice(0, 200)}`);
 
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'action', text: `${input.command}: ${input.path}`, timestamp: new Date().toISOString() });

@@ -251,9 +251,9 @@ async function generateTaskTitle(task: string): Promise<string | null> {
     const client = new Anthropic({ apiKey: getApiKey() });
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 30,
-      messages: [{ role: 'user', content: task }],
-      system: 'Summarize this task in 3-5 words as a short title. Return ONLY the title, nothing else. Examples: "Email summary spreadsheet", "Research competitor pricing", "Draft blog post"',
+      max_tokens: 15,
+      messages: [{ role: 'user', content: `Task: "${task}"\n\nWrite a 3-5 word title for this task. ONLY the title, no explanation.` }],
+      system: 'You output ONLY a short title (3-5 words, no quotes, no markdown, no punctuation). Examples: Open Gmail inbox, Research competitor pricing, Draft Ramp blog post',
     });
     const text = response.content[0]?.type === 'text' ? response.content[0].text.trim() : null;
     return text?.replace(/^["']|["']$/g, '') ?? null; // strip quotes if any
