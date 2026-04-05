@@ -18,12 +18,16 @@ struct AgentResponse: Codable, Identifiable {
 
 // MARK: - APIService
 
-actor APIService {
+final class APIService: Sendable {
     static let shared = APIService()
     private init() {}
 
     private let base = URL(string: "http://localhost:3001")!
-    private let session = URLSession.shared
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        return URLSession(configuration: config)
+    }()
 
     private func request(_ path: String, method: String = "GET", body: (any Encodable)? = nil) async throws -> Data {
         var url = base
@@ -36,7 +40,13 @@ actor APIService {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONEncoder().encode(body)
         }
-        let (data, _) = try await session.data(for: req)
+        print("[APIService] \(method) \(url.absoluteString)")
+        let (data, response) = try await session.data(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            print("[APIService] Error \(http.statusCode): \(body)")
+            throw URLError(.badServerResponse)
+        }
         return data
     }
 
@@ -55,7 +65,14 @@ actor APIService {
     func setApiKey(_ key: String) async throws {
         struct Body: Encodable { let apiKey: String }
         struct Resp: Decodable { let ok: Bool }
-        let _: Resp = try await post("/config", body: Body(apiKey: key))
+        print("[APIService] setApiKey called")
+        do {
+            let _: Resp = try await post("/config", body: Body(apiKey: key))
+            print("[APIService] setApiKey success")
+        } catch {
+            print("[APIService] setApiKey error: \(error)")
+            throw error
+        }
     }
 
     // MARK: - Agents
@@ -70,19 +87,19 @@ actor APIService {
     }
 
     func deleteAgent(id: String) async throws {
-        _ = try await request("/agents/\(id)", method: "DELETE")
+        _ = try await request("/agents/\(id.lowercased())", method: "DELETE")
     }
 
     func sendMessage(agentId: String, text: String) async throws {
         struct Body: Encodable { let text: String }
-        _ = try await request("/agents/\(agentId)/message", method: "POST", body: Body(text: text))
+        _ = try await request("/agents/\(agentId.lowercased())/message", method: "POST", body: Body(text: text))
     }
 
     // MARK: - Recordings & Outputs
 
     func fetchOutputFiles(agentId: String) async throws -> [String] {
         struct Resp: Decodable { let files: [String] }
-        let resp: Resp = try await get("/recordings/\(agentId)/outputs")
+        let resp: Resp = try await get("/recordings/\(agentId.lowercased())/outputs")
         return resp.files
     }
 

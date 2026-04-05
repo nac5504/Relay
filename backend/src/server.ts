@@ -7,6 +7,7 @@ import * as wsHub from './lib/wsHub';
 import * as appConfig from './lib/config';
 import agentsRouter from './routes/agents';
 import recordingsRouter from './routes/recordings';
+import { cleanupStale } from './lib/dockerManager';
 
 const app = express();
 const server = http.createServer(app);
@@ -28,6 +29,7 @@ app.post('/config', (req, res) => {
     return res.status(400).json({ error: '"apiKey" is required' });
   }
   appConfig.setApiKey(apiKey);
+  console.log('[config] API key set');
   res.json({ ok: true });
 });
 
@@ -38,4 +40,5 @@ wss.on('connection', (ws) => {
 
 server.listen(PORT, () => {
   console.log(`Relay backend listening on http://localhost:${PORT}`);
+  cleanupStale().then(() => console.log('[startup] Stale containers cleaned up'));
 });

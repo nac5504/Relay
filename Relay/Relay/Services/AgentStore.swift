@@ -37,7 +37,12 @@ final class AgentStore {
     func createAgent(task: String, agentName: String? = nil) async throws {
         let response = try await APIService.shared.createAgent(task: task, agentName: agentName)
         let agent = BrowserAgent(from: response)
-        agents.append(agent)
+        // WS agent_added may have already added it
+        if !agents.contains(where: { $0.id == agent.id }) {
+            agents.append(agent)
+        }
+        // Auto-focus so chat input routes to this agent
+        focusedAgentId = agent.id
         mainChatMessages.append(ChatMessage(role: .assistant, text: "Spawning agent **\(agent.agentName)** — planning your task..."))
     }
 
@@ -91,8 +96,13 @@ final class AgentStore {
             mainChatMessages.append(ChatMessage(role: .user, text: text))
             try await createAgent(task: task, agentName: name)
         } else if let agent = focusedAgent {
+            // Focused agent — route to it (backend handles plan vs computer use routing)
             mainChatMessages.append(ChatMessage(role: .user, text: text))
             try await sendMessage(to: agent, text: text)
+        } else if let planningAgent = agents.first(where: { $0.relayStatus.isPlanningPhase }) {
+            // Not focused but there's a planning agent — route to it
+            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            try await sendMessage(to: planningAgent, text: text)
         } else if text.hasPrefix("@") {
             let parts = text.dropFirst().split(separator: " ", maxSplits: 1)
             let name = parts.first.map(String.init) ?? ""
@@ -119,13 +129,18 @@ final class AgentStore {
 
     // MARK: - WebSocket mutations
 
+    private func findAgent(id: String) -> BrowserAgent? {
+        guard let uuid = UUID(uuidString: id) else { return nil }
+        return agents.first(where: { $0.id == uuid })
+    }
+
     func updateAgent(id: String, mutation: (BrowserAgent) -> Void) {
-        guard let agent = agents.first(where: { $0.id.uuidString == id }) else { return }
+        guard let agent = findAgent(id: id) else { return }
         mutation(agent)
     }
 
     func appendPlanMessage(agentId: String, role: String, text: String, streaming: Bool) {
-        guard let agent = agents.first(where: { $0.id.uuidString == agentId }) else { return }
+        guard let agent = findAgent(id: agentId) else { return }
 
         if streaming, role == "assistant",
            let last = agent.planMessages.last, last.role == .assistant, !last.isLoading {
@@ -133,16 +148,26 @@ final class AgentStore {
                 id: last.id,
                 role: .assistant,
                 text: last.text + text,
-                timestamp: last.timestamp
+                timestamp: last.timestamp,
+                agentName: agent.agentName
             )
+            // Also update in main chat
+            if let mainIdx = mainChatMessages.lastIndex(where: { $0.id == last.id }) {
+                mainChatMessages[mainIdx] = agent.planMessages[agent.planMessages.count - 1]
+            }
         } else {
             let chatRole: ChatMessage.Role = role == "user" ? .user : .assistant
-            agent.planMessages.append(ChatMessage(role: chatRole, text: text))
+            let msg = ChatMessage(role: chatRole, text: text, agentName: role == "assistant" ? agent.agentName : nil)
+            agent.planMessages.append(msg)
+            // Mirror assistant messages to main chat (user messages already added by processMainChatInput)
+            if role != "user" {
+                mainChatMessages.append(msg)
+            }
         }
     }
 
     func appendChatMessage(agentId: String, role: String, text: String) {
-        guard let agent = agents.first(where: { $0.id.uuidString == agentId }) else { return }
+        guard let agent = findAgent(id: agentId) else { return }
         let chatRole: ChatMessage.Role
         let displayText: String
 
@@ -168,7 +193,8 @@ final class AgentStore {
         guard let idStr = json["id"] as? String,
               let uuid = UUID(uuidString: idStr) else { return }
 
-        if agents.first(where: { $0.id == uuid }) != nil { return }
+        // Already exists (createAgent response may have added it before the WS event)
+        if agents.contains(where: { $0.id == uuid }) { return }
 
         let response = AgentResponse(
             id: idStr,
@@ -187,7 +213,8 @@ final class AgentStore {
     }
 
     func removeAgent(id: String) {
-        agents.removeAll { $0.id.uuidString == id }
-        if focusedAgentId?.uuidString == id { focusedAgentId = nil }
+        guard let uuid = UUID(uuidString: id) else { return }
+        agents.removeAll { $0.id == uuid }
+        if focusedAgentId == uuid { focusedAgentId = nil }
     }
 }

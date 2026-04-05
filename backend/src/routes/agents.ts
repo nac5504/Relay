@@ -75,16 +75,19 @@ router.post('/', async (req: Request, res: Response) => {
     error: null,
   });
 
+  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${task.slice(0, 60)}"`);
   wsHub.broadcast({ type: 'agent_added', agent: summarize(agent) });
   res.status(201).json(summarize(agent));
 
   setImmediate(async () => {
     // 1. Start plan agent immediately (it streams while container boots)
+    console.log(`[agents] Starting plan agent for ${agentId}`);
     planAgent.runPlanAgent(agentId, async (_finalPlan: string) => {
-      // Wait for container to be ready before starting the loop
+      console.log(`[agents] Plan complete for ${agentId} — waiting for container`);
       await waitForContainerReady(agentId);
       const current = registry.get(agentId);
       if (!current || current.status === 'stopped') return;
+      console.log(`[agents] Starting computer use loop for ${agentId}`);
       registry.update(agentId, { status: 'working' });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: 0 });
       claudeLoop.runAgentLoop(agentId).catch((err) => {
@@ -96,11 +99,15 @@ router.post('/', async (req: Request, res: Response) => {
 
     // 2. Boot container in background
     try {
+      console.log(`[agents] Starting container for ${agentId}`);
       const { containerName, noVNCPort, vncPort } = await docker.startContainer(agentId, sessionId);
+      console.log(`[agents] Container ${containerName} started — noVNC:${noVNCPort} VNC:${vncPort}`);
       registry.update(agentId, { containerName, noVNCPort, vncPort });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', noVNCPort, vncPort, cost: 0 });
 
+      console.log(`[agents] Waiting for container ready on port ${noVNCPort}...`);
       await docker.waitForReady(noVNCPort);
+      console.log(`[agents] Container ready for ${agentId}`);
 
       // Start recording now that container is ready
       const recordingProc = recordingManager.startRecording(containerName, sessionId);
@@ -151,8 +158,11 @@ router.post('/:id/message', (req: Request, res: Response) => {
   const { text } = req.body as { text?: string };
   if (!text) return res.status(400).json({ error: '"text" is required' });
 
+  console.log(`[agents] Message for ${req.params.id} (status: ${agent.status}): "${text.slice(0, 60)}"`);
+
   if (agent.status === 'starting' || agent.status === 'planning') {
     // Route to plan agent
+    console.log(`[agents] Routing to plan agent`);
     planAgent.injectPlanMessage(req.params.id, text);
   } else {
     // Route to computer use agent

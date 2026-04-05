@@ -6,9 +6,11 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
-const DOCKER = ['/usr/local/bin/docker', '/opt/homebrew/bin/docker', 'docker'].find(
-  (p) => p === 'docker' || existsSync(p),
-) ?? 'docker';
+const DOCKER = [
+  '/usr/local/bin/docker',
+  '/opt/homebrew/bin/docker',
+  '/Applications/Docker.app/Contents/Resources/bin/docker',
+].find((p) => existsSync(p)) ?? 'docker';
 
 const OUTPUTS_BASE = path.resolve(process.env.OUTPUTS_DIR ?? './outputs');
 

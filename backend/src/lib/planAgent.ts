@@ -76,6 +76,7 @@ export async function runPlanAgent(
     if (!current || current.status === 'stopped' || current.status === 'working') break;
 
     // Stream plan agent response
+    console.log(`[planAgent] Calling Claude for ${agentId} (${messages.length} messages)`);
     let fullText = '';
     let toolName = '';
     let toolInputJson = '';
@@ -137,9 +138,11 @@ export async function runPlanAgent(
         }
       }
     } catch (err) {
-      console.error(`[planAgent] Stream error for ${agentId}:`, (err as Error).message);
+      console.error(`[planAgent] Stream error for ${agentId}:`, (err as Error).message, (err as Error).stack);
       break;
     }
+
+    console.log(`[planAgent] Response done — text: ${fullText.length} chars, tool: ${toolName || 'none'}`);
 
     // Append assistant turn to history
     const assistantContent: Anthropic.ContentBlockParam[] = [];
@@ -171,9 +174,11 @@ export async function runPlanAgent(
     }
 
     // Wait for next user message (poll with 200ms interval, 5 min timeout)
+    console.log(`[planAgent] Waiting for user message for ${agentId}...`);
     const userMsg = await pollForMessage(agentId, 300_000);
-    if (!userMsg) break;
+    if (!userMsg) { console.log(`[planAgent] No message received — exiting`); break; }
 
+    console.log(`[planAgent] Got user message: "${userMsg.slice(0, 60)}"`);
     pendingMessages.delete(agentId);
     messages.push({ role: 'user', content: userMsg });
     wsHub.broadcast({

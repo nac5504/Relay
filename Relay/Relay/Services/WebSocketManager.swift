@@ -1,46 +1,64 @@
 import Foundation
 
 @Observable
-final class WebSocketManager {
+final class WebSocketManager: @unchecked Sendable {
     static let shared = WebSocketManager()
     private init() {}
 
     private var task: URLSessionWebSocketTask?
     private var reconnectDelay: TimeInterval = 1
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 300
+        return URLSession(configuration: config)
+    }()
     var isConnected = false
 
     func connect() {
+        // Cancel existing task
+        task?.cancel(with: .normalClosure, reason: nil)
+
         let url = URL(string: "ws://localhost:3001")!
-        task = URLSession.shared.webSocketTask(with: url)
-        task?.resume()
-        isConnected = true
+        let wsTask = session.webSocketTask(with: url)
+        self.task = wsTask
+        wsTask.resume()
         reconnectDelay = 1
-        receive()
+        print("[WS] Connecting to \(url)")
+        receive(wsTask)
     }
 
     func disconnect() {
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
-        isConnected = false
+        DispatchQueue.main.async { self.isConnected = false }
     }
 
-    private func receive() {
-        task?.receive { [weak self] result in
-            guard let self else { return }
+    private func receive(_ wsTask: URLSessionWebSocketTask) {
+        wsTask.receive { [weak self] result in
+            guard let self, self.task === wsTask else { return }
+
             switch result {
-            case .failure:
-                self.isConnected = false
-                let delay = self.reconnectDelay
-                self.reconnectDelay = min(self.reconnectDelay * 2, 30)
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    self.connect()
-                }
+            case .failure(let error):
+                print("[WS] Receive error: \(error.localizedDescription)")
+                DispatchQueue.main.async { self.isConnected = false }
+                self.scheduleReconnect()
+
             case .success(let message):
+                DispatchQueue.main.async { self.isConnected = true }
                 if case .string(let text) = message {
                     self.handle(text)
                 }
-                self.receive()
+                self.receive(wsTask)
             }
+        }
+    }
+
+    private func scheduleReconnect() {
+        let delay = reconnectDelay
+        reconnectDelay = min(reconnectDelay * 2, 30)
+        print("[WS] Reconnecting in \(delay)s...")
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.connect()
         }
     }
 
@@ -53,13 +71,16 @@ final class WebSocketManager {
             let store = AgentStore.shared
 
             switch type {
+            case "connected":
+                print("[WS] Connected to backend")
+                self.isConnected = true
+
             case "agent_update":
                 guard let agentId = json["agentId"] as? String else { return }
                 store.updateAgent(id: agentId) { agent in
                     if let status = json["status"] as? String {
                         agent.relayStatus = RelayAgentStatus(rawValue: status) ?? agent.relayStatus
                         agent.waitingForInput = (status == "waiting")
-                        // Sync legacy status
                         if status == "completed" || status == "stopped" || status == "error" {
                             agent.status = .stopped
                         } else if status == "working" {

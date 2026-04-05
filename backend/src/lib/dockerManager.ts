@@ -1,16 +1,32 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import path from 'path';
 import { existsSync } from 'fs';
 import { getApiKey } from './config';
 import { ComputerToolInput } from './types';
 
 const execFileAsync = promisify(execFile);
 
-const DOCKER = ['/usr/local/bin/docker', '/opt/homebrew/bin/docker', 'docker'].find(
-  (p) => p === 'docker' || existsSync(p),
-) ?? 'docker';
+const DOCKER = [
+  '/usr/local/bin/docker',
+  '/opt/homebrew/bin/docker',
+  '/Applications/Docker.app/Contents/Resources/bin/docker',
+].find((p) => existsSync(p)) ?? 'docker';
+
+// Ensure Docker credential helpers and CLI tools are in PATH
+const EXTRA_PATHS = [
+  '/usr/local/bin',
+  '/opt/homebrew/bin',
+  '/Applications/Docker.app/Contents/Resources/bin',
+];
+const DOCKER_ENV: Record<string, string> = {
+  ...process.env as Record<string, string>,
+  PATH: [...new Set([...EXTRA_PATHS, ...(process.env.PATH ?? '').split(':')])].join(':'),
+};
 
 const RECORDINGS_DIR = process.env.RECORDINGS_DIR ?? './recordings';
+const RELAY_IMAGE = 'relay-agent';
+const DOCKER_DIR = path.resolve(__dirname, '..', '..', 'docker');
 
 // Port allocation — base 17900, 10 ports per agent
 const BASE_PORT = 17900;
@@ -39,12 +55,12 @@ export function releasePorts(noVNCPort: number): void {
 }
 
 async function dockerRun(args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(DOCKER, args);
+  const { stdout } = await execFileAsync(DOCKER, args, { env: DOCKER_ENV, maxBuffer: 10 * 1024 * 1024 });
   return stdout.trim();
 }
 
 export async function execInContainer(containerName: string, shellCmd: string): Promise<string> {
-  const { stdout } = await execFileAsync(DOCKER, ['exec', containerName, 'bash', '-c', shellCmd]);
+  const { stdout } = await execFileAsync(DOCKER, ['exec', containerName, 'bash', '-c', shellCmd], { env: DOCKER_ENV });
   return stdout;
 }
 
@@ -54,21 +70,43 @@ export interface ContainerInfo {
   vncPort: number;
 }
 
+let imageReady = false;
+
+export async function ensureImage(): Promise<void> {
+  if (imageReady) return;
+  try {
+    const out = await dockerRun(['images', '-q', RELAY_IMAGE]);
+    if (out.length > 0) {
+      imageReady = true;
+      console.log(`[docker] Image ${RELAY_IMAGE} already exists`);
+      return;
+    }
+  } catch { /* no image */ }
+
+  console.log(`[docker] Building ${RELAY_IMAGE} image (one-time, installs ffmpeg + scrot)...`);
+  await dockerRun(['build', '-t', RELAY_IMAGE, DOCKER_DIR]);
+  imageReady = true;
+  console.log(`[docker] Image ${RELAY_IMAGE} built successfully`);
+}
+
 export async function startContainer(agentId: string, sessionId: string): Promise<ContainerInfo> {
+  await ensureImage();
+
   const ports = allocatePorts();
   const containerName = `relay-agent-${agentId.replace(/-/g, '').slice(0, 12)}`;
+  const recordingsPath = path.resolve(RECORDINGS_DIR, sessionId);
 
   await dockerRun([
     'run', '-d',
     '--name', containerName,
     '-p', `${ports.noVNC}:6080`,
     '-p', `${ports.vnc}:5900`,
-    '-v', `${RECORDINGS_DIR}/${sessionId}:/recordings`,
+    '-v', `${recordingsPath}:/recordings`,
     '-e', `ANTHROPIC_API_KEY=${getApiKey()}`,
     '-e', 'WIDTH=1024',
     '-e', 'HEIGHT=768',
     '--shm-size=2g',
-    'ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest',
+    RELAY_IMAGE,
   ]);
 
   return { containerName, noVNCPort: ports.noVNC, vncPort: ports.vnc };

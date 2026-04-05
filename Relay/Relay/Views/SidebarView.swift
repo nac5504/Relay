@@ -128,10 +128,15 @@ struct SidebarView: View {
                     Button(isCreating ? "Starting..." : "Create") {
                         isCreating = true
                         Task {
-                            try? await store.createAgent(task: newTaskText)
-                            isCreating = false
-                            showNewAgentSheet = false
-                            newTaskText = ""
+                            do {
+                                try await store.createAgent(task: newTaskText)
+                                isCreating = false
+                                showNewAgentSheet = false
+                                newTaskText = ""
+                            } catch {
+                                print("[SidebarView] Create agent failed: \(error)")
+                                isCreating = false
+                            }
                         }
                     }
                     .disabled(newTaskText.trimmingCharacters(in: .whitespaces).isEmpty || isCreating)

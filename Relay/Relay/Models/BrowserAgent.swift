@@ -53,7 +53,7 @@ class BrowserAgent: Identifiable {
 
     var noVNCURL: URL? {
         guard noVNCPort > 0 else { return nil }
-        return URL(string: "http://localhost:\(noVNCPort)/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000")
+        return URL(string: "http://localhost:\(noVNCPort)/vnc_lite.html?autoconnect=true&resize=scale")
     }
 
     var formattedCost: String {

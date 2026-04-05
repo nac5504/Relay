@@ -7,14 +7,14 @@ struct BrowserTileView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if agent.status == .running {
+            if agent.noVNCPort > 0, agent.noVNCURL != nil {
                 BrowserStreamView(
                     agent: agent,
                     onFPSUpdate: { fps in
                         agent.fps = fps
                     }
                 )
-            } else if agent.status == .error {
+            } else if agent.relayStatus == .error {
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.largeTitle)
@@ -30,7 +30,7 @@ struct BrowserTileView: View {
                 VStack(spacing: 12) {
                     ProgressView()
                         .scaleEffect(1.5)
-                    Text("Starting \(agent.displayName)...")
+                    Text("Starting \(agent.agentName)...")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -75,11 +75,6 @@ struct BrowserTileView: View {
     }
 
     private var borderColor: Color {
-        switch agent.status {
-        case .running: .green.opacity(0.5)
-        case .starting: .orange.opacity(0.5)
-        case .error: .red.opacity(0.5)
-        default: .gray.opacity(0.3)
-        }
+        agent.relayStatus.dotColor.opacity(0.5)
     }
 }

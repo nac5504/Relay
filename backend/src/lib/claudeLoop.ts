@@ -99,6 +99,7 @@ If you need clarification or reach a decision point requiring user input, say "W
       }
 
       // Call Claude Computer Use API — let TypeScript infer the response type
+      console.log(`[loop:${agentId.slice(0,8)}] Iteration ${iterations} — calling Claude (${messages.length} messages)`);
       let response;
       try {
         response = await makeClient().beta.messages.create({
@@ -131,6 +132,11 @@ If you need clarification or reach a decision point requiring user input, say "W
         wsHub.broadcast({ type: 'agent_update', agentId, status: 'error' });
         break;
       }
+
+      // Log response summary
+      const textBlocks = response.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text);
+      const toolUses = response.content.filter((b) => b.type === 'tool_use').map((b) => (b as { name: string; input: unknown }).name);
+      console.log(`[loop:${agentId.slice(0,8)}] Response — stop: ${response.stop_reason}, text: ${textBlocks.map(t => t.slice(0,80)).join(' | ') || '(none)'}, tools: [${toolUses.join(', ')}]`);
 
       messages.push({ role: 'assistant', content: response.content as AnthropicMessage['content'] });
 
@@ -170,11 +176,12 @@ If you need clarification or reach a decision point requiring user input, say "W
         if (block.name === 'computer') {
           // Computer use: execute action, take screenshot, return image
           const toolInput = block.input as ComputerToolInput;
+          console.log(`[loop:${agentId.slice(0,8)}] 🖱  ${describeAction(toolInput)}`);
 
           try {
             await docker.executeAction(containerName, toolInput);
           } catch (err) {
-            console.warn(`Action failed (${toolInput.action}): ${(err as Error).message}`);
+            console.warn(`[loop:${agentId.slice(0,8)}] Action failed (${toolInput.action}): ${(err as Error).message}`);
           }
 
           await new Promise<void>((r) => setTimeout(r, 500));
@@ -205,12 +212,23 @@ If you need clarification or reach a decision point requiring user input, say "W
 
         } else if (block.name === 'bash') {
           // Bash: execute command inside container, return stdout/stderr as text
-          const { command } = block.input as { command: string };
+          const input = block.input as { command?: string; restart?: boolean };
+          const command = input.command ?? '';
+
+          if (input.restart) {
+            console.log(`[loop:${agentId.slice(0,8)}] 💻 bash restart`);
+            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: 'Bash restarted.' }] });
+            continue;
+          }
+
+          console.log(`[loop:${agentId.slice(0,8)}] 💻 $ ${command.slice(0, 100)}`);
           let output = '';
           try {
             output = await docker.execInContainer(containerName, command);
+            if (output.trim()) console.log(`[loop:${agentId.slice(0,8)}]    → ${output.trim()}`);
           } catch (err) {
             output = `Error: ${(err as Error).message}`;
+            console.warn(`[loop:${agentId.slice(0,8)}]    → ${output}`);
           }
 
           const event = {
@@ -235,6 +253,7 @@ If you need clarification or reach a decision point requiring user input, say "W
         } else if (block.name === 'str_replace_based_edit_tool') {
           // Text editor: execute via bash inside container, return result
           const input = block.input as { command: string; path: string; old_str?: string; new_str?: string; insert_line?: number; new_file_text?: string };
+          console.log(`[loop:${agentId.slice(0,8)}] 📝 ${input.command} ${input.path}`);
           let output = '';
           try {
             if (input.command === 'view') {

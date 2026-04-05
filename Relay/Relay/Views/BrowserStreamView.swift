@@ -11,6 +11,14 @@ struct BrowserStreamView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
+        // Hide noVNC header and make canvas fill
+        let hideHeaderScript = WKUserScript(
+            source: Self.hideHeaderJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+        config.userContentController.addUserScript(hideHeaderScript)
+
         // Auto-reconnect script: monitors noVNC connection state and retries on failure
         let reconnectScript = WKUserScript(
             source: Self.autoReconnectJS,
@@ -28,8 +36,12 @@ struct BrowserStreamView: NSViewRepresentable {
         config.userContentController.addUserScript(fpsScript)
         config.userContentController.add(context.coordinator, name: "fpsReport")
 
+        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        webView.setValue(false, forKey: "drawsBackground")
         if let url = agent.noVNCURL {
             webView.load(URLRequest(url: url))
         }
@@ -69,7 +81,34 @@ struct BrowserStreamView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             // noVNC loaded
         }
+
+        // Allow localhost connections without TLS
+        func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+            if challenge.protectionSpace.host == "localhost" {
+                return (.useCredential, URLCredential(trust: challenge.protectionSpace.serverTrust!))
+            }
+            return (.performDefaultHandling, nil)
+        }
     }
+
+    /// Hides noVNC chrome and makes canvas fill the view
+    private static let hideHeaderJS = """
+    (function() {
+        var style = document.createElement('style');
+        style.textContent = `
+            #top_bar { display: none !important; }
+            #status { display: none !important; }
+            #noVNC_control_bar { display: none !important; }
+            #noVNC_status_bar { display: none !important; }
+            body { margin: 0 !important; overflow: hidden !important; background: #1a1a1a !important; }
+            #noVNC_container { width: 100vw !important; height: 100vh !important; }
+            #noVNC_screen { width: 100vw !important; height: 100vh !important; }
+            #screen { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; }
+            canvas { width: 100% !important; height: 100% !important; object-fit: contain !important; }
+        `;
+        document.head.appendChild(style);
+    })();
+    """
 
     /// Monitors noVNC connection state and forces reconnect on initial failure
     private static let autoReconnectJS = """
