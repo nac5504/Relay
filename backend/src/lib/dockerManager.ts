@@ -71,7 +71,7 @@ export interface ContainerInfo {
 }
 
 let imageReady = false;
-const IMAGE_VERSION = '2'; // bump to force rebuild
+const IMAGE_VERSION = '3'; // bump to force rebuild — added relay_tool_runner.py
 
 export async function ensureImage(): Promise<void> {
   if (imageReady) return;
@@ -122,82 +122,47 @@ export async function stopContainer(containerName: string, noVNCPort: number | n
   if (noVNCPort !== null) releasePorts(noVNCPort);
 }
 
+/**
+ * Run an Anthropic tool via the Python relay_tool_runner.py inside the container.
+ * Returns parsed JSON result.
+ */
+async function runTool(containerName: string, toolName: string, input: Record<string, unknown> = {}): Promise<{ base64?: string; output?: string; error?: string }> {
+  const inputJson = JSON.stringify(input).replace(/'/g, "'\\''");
+  const cmd = `python3 /relay_tool_runner.py ${toolName} '${inputJson}'`;
+  const raw = await execInContainer(containerName, cmd);
+  try {
+    return JSON.parse(raw.trim().split('\n').pop()!);
+  } catch {
+    return { error: raw.slice(0, 500) };
+  }
+}
+
 export async function screenshot(containerName: string): Promise<string> {
-  // Use scrot -p (pointer/composited mode) matching Anthropic's reference implementation
-  const cmd = `DISPLAY=:1 scrot -p /tmp/relay_ss.png && base64 /tmp/relay_ss.png`;
-  const b64 = await execInContainer(containerName, cmd);
-  return b64.replace(/\s/g, '');
+  const result = await runTool(containerName, 'screenshot');
+  if (result.error) console.warn(`[docker] Screenshot error: ${result.error}`);
+  return result.base64 ?? '';
 }
 
 export async function executeAction(containerName: string, toolInput: ComputerToolInput): Promise<void> {
-  const { action } = toolInput;
-
-  switch (action) {
-    case 'screenshot':
-      break;
-
-    case 'mouse_move': {
-      const [x, y] = toolInput.coordinate!;
-      await execInContainer(containerName, `DISPLAY=:1 xdotool mousemove ${x} ${y}`);
-      break;
-    }
-
-    case 'left_click': {
-      const [x, y] = toolInput.coordinate!;
-      await execInContainer(containerName, `DISPLAY=:1 xdotool mousemove ${x} ${y} click 1`);
-      break;
-    }
-
-    case 'right_click': {
-      const [x, y] = toolInput.coordinate!;
-      await execInContainer(containerName, `DISPLAY=:1 xdotool mousemove ${x} ${y} click 3`);
-      break;
-    }
-
-    case 'double_click': {
-      const [x, y] = toolInput.coordinate!;
-      await execInContainer(containerName, `DISPLAY=:1 xdotool mousemove ${x} ${y} click --repeat 2 1`);
-      break;
-    }
-
-    case 'triple_click': {
-      const [x, y] = toolInput.coordinate!;
-      await execInContainer(containerName, `DISPLAY=:1 xdotool mousemove ${x} ${y} click 1 && DISPLAY=:1 xdotool key ctrl+a`);
-      break;
-    }
-
-    case 'type': {
-      const escaped = toolInput.text!.replace(/'/g, "'\\''");
-      await execInContainer(containerName, `DISPLAY=:1 xdotool type --clearmodifiers '${escaped}'`);
-      break;
-    }
-
-    case 'key':
-      await execInContainer(containerName, `DISPLAY=:1 xdotool key ${toolInput.key}`);
-      break;
-
-    case 'scroll': {
-      const [x, y] = toolInput.coordinate!;
-      const button = toolInput.scroll_direction === 'up' ? 4 : 5;
-      const clicks = toolInput.scroll_amount ?? 3;
-      await execInContainer(containerName, `DISPLAY=:1 xdotool mousemove ${x} ${y} click --repeat ${clicks} ${button}`);
-      break;
-    }
-
-    case 'drag': {
-      const [sx, sy] = toolInput.startCoordinate!;
-      const [ex, ey] = toolInput.coordinate!;
-      await execInContainer(containerName, `DISPLAY=:1 xdotool mousemove ${sx} ${sy} mousedown 1 mousemove ${ex} ${ey} mouseup 1`);
-      break;
-    }
-
-    case 'wait':
-      await new Promise<void>((r) => setTimeout(r, (toolInput.duration ?? 1) * 1000));
-      break;
-
-    default:
-      console.warn(`Unknown action: ${action}`);
+  if (toolInput.action === 'screenshot') return; // handled separately
+  if (toolInput.action === 'wait') {
+    await new Promise<void>((r) => setTimeout(r, (toolInput.duration ?? 1) * 1000));
+    return;
   }
+  const result = await runTool(containerName, 'computer', toolInput as unknown as Record<string, unknown>);
+  if (result.error) console.warn(`[docker] Action error: ${result.error}`);
+}
+
+export async function executeBash(containerName: string, input: { command?: string; restart?: boolean }): Promise<string> {
+  const result = await runTool(containerName, 'bash', input as Record<string, unknown>);
+  if (result.error) return `Error: ${result.error}`;
+  return result.output ?? '';
+}
+
+export async function executeTextEditor(containerName: string, input: Record<string, unknown>): Promise<string> {
+  const result = await runTool(containerName, 'text_editor', input);
+  if (result.error) return `Error: ${result.error}`;
+  return result.output ?? '';
 }
 
 export async function waitForReady(noVNCPort: number, timeoutMs = 60_000): Promise<void> {

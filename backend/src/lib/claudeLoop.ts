@@ -209,83 +209,32 @@ If you need clarification or reach a decision point requiring user input, say "W
           });
 
         } else if (block.name === 'bash') {
-          // Bash: execute command inside container, return stdout/stderr as text
           const input = block.input as { command?: string; restart?: boolean };
           const command = input.command ?? '';
+          console.log(`[loop:${agentId.slice(0,8)}] 💻 ${input.restart ? 'bash restart' : `$ ${command.slice(0, 100)}`}`);
 
-          if (input.restart) {
-            console.log(`[loop:${agentId.slice(0,8)}] 💻 bash restart`);
-            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: 'Bash restarted.' }] });
-            continue;
-          }
-
-          console.log(`[loop:${agentId.slice(0,8)}] 💻 $ ${command.slice(0, 100)}`);
-          let output = '';
-          try {
-            output = await docker.execInContainer(containerName, command);
-            if (output.trim()) console.log(`[loop:${agentId.slice(0,8)}]    → ${output.trim()}`);
-          } catch (err) {
-            output = `Error: ${(err as Error).message}`;
-            console.warn(`[loop:${agentId.slice(0,8)}]    → ${output}`);
-          }
+          const output = await docker.executeBash(containerName, input);
+          if (output.trim()) console.log(`[loop:${agentId.slice(0,8)}]    → ${output.trim().slice(0, 200)}`);
 
           const event = {
             id: uuidv4(),
             timestampMs: actionStartMs,
             actionType: 'bash',
-            description: `Ran: ${command.slice(0, 60)}${command.length > 60 ? '…' : ''}`,
+            description: input.restart ? 'Restarted bash' : `Ran: ${command.slice(0, 60)}${command.length > 60 ? '…' : ''}`,
             coordinates: null,
           };
           recordingManager.logAction(sessionId, event);
           wsHub.broadcast({ type: 'action', agentId, event });
-          wsHub.broadcast({
-            type: 'chat_message',
-            agentId,
-            role: 'action',
-            text: event.description,
-            timestamp: new Date().toISOString(),
-          });
+          wsHub.broadcast({ type: 'chat_message', agentId, role: 'action', text: event.description, timestamp: new Date().toISOString() });
 
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: output }] });
 
         } else if (block.name === 'str_replace_based_edit_tool') {
-          // Text editor: execute via bash inside container, return result
-          const input = block.input as { command: string; path: string; old_str?: string; new_str?: string; insert_line?: number; new_file_text?: string };
+          const input = block.input as Record<string, unknown>;
           console.log(`[loop:${agentId.slice(0,8)}] 📝 ${input.command} ${input.path}`);
-          let output = '';
-          try {
-            if (input.command === 'view') {
-              output = await docker.execInContainer(containerName, `cat "${input.path}" 2>&1 || echo "File not found"`);
-            } else if (input.command === 'create') {
-              const escaped = (input.new_file_text ?? '').replace(/'/g, "'\\''");
-              await docker.execInContainer(containerName, `mkdir -p "$(dirname '${input.path}')" && printf '%s' '${escaped}' > '${input.path}'`);
-              output = 'File created successfully';
-            } else if (input.command === 'str_replace') {
-              const tmpScript = `/tmp/relay_edit_${Date.now()}.py`;
-              const script = `
-import sys
-path = sys.argv[1]
-old = sys.argv[2]
-new = sys.argv[3]
-with open(path, 'r') as f:
-    content = f.read()
-if old not in content:
-    print("ERROR: old_str not found")
-    sys.exit(1)
-with open(path, 'w') as f:
-    f.write(content.replace(old, new, 1))
-print("OK")
-`.trim();
-              await docker.execInContainer(containerName, `cat > ${tmpScript} << 'PYEOF'\n${script}\nPYEOF`);
-              output = await docker.execInContainer(containerName,
-                `python3 ${tmpScript} '${input.path}' '${(input.old_str ?? '').replace(/'/g, "'\\''")}' '${(input.new_str ?? '').replace(/'/g, "'\\''")}'`);
-            } else if (input.command === 'insert') {
-              output = await docker.execInContainer(containerName,
-                `sed -i '${input.insert_line}a\\${(input.new_str ?? '').replace(/'/g, "'\\''")}' '${input.path}' && echo "OK"`);
-            }
-          } catch (err) {
-            output = `Error: ${(err as Error).message}`;
-          }
+
+          const output = await docker.executeTextEditor(containerName, input);
+          if (output.trim()) console.log(`[loop:${agentId.slice(0,8)}]    → ${output.trim().slice(0, 200)}`);
 
           wsHub.broadcast({ type: 'action', agentId, event: { id: uuidv4(), timestampMs: actionStartMs, actionType: 'text_editor', description: `${input.command}: ${input.path}`, coordinates: null } });
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: output }] });
