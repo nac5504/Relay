@@ -34,13 +34,13 @@ const STRIDE = 10;
 let nextIndex = 0;
 const freedIndices: number[] = [];
 
-interface Ports {
+export interface Ports {
   noVNC: number;
   vnc: number;
   _index: number;
 }
 
-function allocatePorts(): Ports {
+export function allocatePorts(): Ports {
   const index = freedIndices.length > 0 ? freedIndices.pop()! : nextIndex++;
   return {
     noVNC: BASE_PORT + index * STRIDE,
@@ -54,7 +54,7 @@ export function releasePorts(noVNCPort: number): void {
   if (Number.isInteger(index)) freedIndices.push(index);
 }
 
-async function dockerRun(args: string[]): Promise<string> {
+export async function dockerRun(args: string[]): Promise<string> {
   const { stdout } = await execFileAsync(DOCKER, args, { env: DOCKER_ENV, maxBuffer: 10 * 1024 * 1024 });
   return stdout.trim();
 }
@@ -75,7 +75,7 @@ export interface ContainerInfo {
 }
 
 let imageReady = false;
-const IMAGE_VERSION = '4'; // bump to force rebuild — fix versioned tool class imports
+const IMAGE_VERSION = '7'; // bump to force rebuild — wallpaper via pcmanfm
 
 export async function ensureImage(): Promise<void> {
   if (imageReady) return;
@@ -244,13 +244,15 @@ export async function buildImageStreaming(onLine: (line: string) => void): Promi
 }
 
 export async function cleanupStale(): Promise<void> {
-  try {
-    const out = await dockerRun(['ps', '-a', '--filter', 'name=relay-agent', '-q']);
-    const ids = out.split('\n').filter(Boolean);
-    for (const id of ids) {
-      await dockerRun(['rm', '-f', id]).catch(() => {});
+  for (const filter of ['name=relay-agent', 'name=relay-warm']) {
+    try {
+      const out = await dockerRun(['ps', '-a', '--filter', filter, '-q']);
+      const ids = out.split('\n').filter(Boolean);
+      for (const id of ids) {
+        await dockerRun(['rm', '-f', id]).catch(() => {});
+      }
+    } catch {
+      // Docker not available or no stale containers
     }
-  } catch {
-    // Docker not available or no stale containers
   }
 }

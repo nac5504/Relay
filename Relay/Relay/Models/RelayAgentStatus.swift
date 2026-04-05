@@ -26,13 +26,13 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
     var dotColor: Color {
         switch self {
         case .working: return .green
-        case .planning: return .cyan
-        case .waiting: return .orange
-        case .starting: return .yellow
+        case .planning: return .yellow
+        case .waiting: return .yellow
+        case .starting: return .blue
         case .completed: return .blue
         case .error: return .red
         case .stopped: return .gray
-        case .notStarted: return .gray.opacity(0.5)
+        case .notStarted: return .yellow
         }
     }
 

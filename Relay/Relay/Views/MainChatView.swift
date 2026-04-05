@@ -21,19 +21,24 @@ struct MainChatView: View {
                         }
 
                         ForEach(Array(store.mainChatMessages.enumerated()), id: \.element.id) { i, msg in
-                            let prev = i > 0 ? store.mainChatMessages[i - 1] : nil
-                            let isFirstInGroup = prev == nil || prev?.role != msg.role || prev?.agentName != msg.agentName
                             let isLast = i == store.mainChatMessages.count - 1 && !hasWorkingAgent
                             let status = actionStatus(at: i, in: store.mainChatMessages)
                             let avatarURL = msg.agentName.flatMap { name in
                                 store.agents.first(where: { $0.agentName == name })?.avatarURL
                             }
+                            let isLastForAgent: Bool = {
+                                guard let name = msg.agentName else { return false }
+                                if i == store.mainChatMessages.count - 1 { return true }
+                                return !store.mainChatMessages[(i + 1)...].contains { $0.agentName == name }
+                            }()
                             MainTimelineRow(
                                 message: msg,
-                                isFirstInGroup: isFirstInGroup,
+                                isLastForAgent: isLastForAgent,
                                 showLine: !isLast,
+                                isFirstRow: i == 0,
                                 status: status,
-                                agentAvatarURL: avatarURL
+                                agentAvatarURL: avatarURL,
+                                agentColor: agentLineColor(for: msg.agentName)
                             )
                             .id(msg.id)
                         }
@@ -128,34 +133,51 @@ struct MainChatView: View {
 
 private struct MainTimelineRow: View {
     let message: ChatMessage
-    let isFirstInGroup: Bool
+    let isLastForAgent: Bool
     let showLine: Bool
+    let isFirstRow: Bool
     let status: ActionStatus
     var agentAvatarURL: URL? = nil
+    var agentColor: Color = .white.opacity(0.15)
 
     private var dotColor: Color {
         if message.isError { return .red }
-        if message.role == .action || message.role == .output { return status.dotColor }
         if message.role == .user { return .accentColor.opacity(0.6) }
-        return .white.opacity(0.15)
+        return agentColor
+    }
+
+    private var lineColor: Color {
+        if message.role == .user { return .white.opacity(0.08) }
+        return agentColor.opacity(0.25)
     }
 
     private var dotSize: CGFloat {
         (message.role == .action || message.role == .output) ? 8 : 6
     }
 
+    private var topLineHeight: CGFloat {
+        (message.role == .action || message.role == .output) ? 5 : 6
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Timeline dot + line
+            // Timeline dot + connecting lines
             VStack(spacing: 0) {
+                if isFirstRow {
+                    Color.clear.frame(width: 1, height: topLineHeight)
+                } else {
+                    Rectangle()
+                        .fill(lineColor)
+                        .frame(width: 1, height: topLineHeight)
+                }
+
                 Circle()
                     .fill(dotColor)
                     .frame(width: dotSize, height: dotSize)
-                    .padding(.top, message.role == .action ? 5 : 6)
 
                 if showLine {
                     Rectangle()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(lineColor)
                         .frame(width: 1)
                         .frame(maxHeight: .infinity)
                 }
@@ -164,15 +186,15 @@ private struct MainTimelineRow: View {
 
             // Content
             VStack(alignment: .leading, spacing: 2) {
-                // Agent name on first in group (for non-user messages)
-                if isFirstInGroup && message.role != .user, let name = message.agentName {
+                // Agent name only on the most recent message from this agent
+                if isLastForAgent && message.role != .user, let name = message.agentName {
                     HStack(spacing: 6) {
                         if let url = agentAvatarURL {
                             CachedAvatarView(url: url, size: 16)
                         }
                         Text(name)
                             .font(.system(.caption, design: .monospaced, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.4))
+                            .foregroundStyle(agentColor.opacity(0.7))
                     }
                     .padding(.bottom, 2)
                 }
@@ -364,8 +386,10 @@ private struct MainThinkingRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(spacing: 0) {
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(width: 1, height: 6)
                 MainPulsingDot()
-                    .padding(.top, 6)
             }
             .frame(width: 10)
 
@@ -417,6 +441,13 @@ private struct ThinkingDotsView: View {
 }
 
 // MARK: - Colored Text Helper
+
+func agentLineColor(for name: String?) -> Color {
+    let palette: [Color] = [.cyan, .pink, .orange, .mint, .purple, .yellow, .green, .indigo]
+    guard let name = name, !name.isEmpty else { return .white.opacity(0.15) }
+    let hash = name.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+    return palette[hash % palette.count]
+}
 
 func coloredText(_ text: String) -> AttributedString {
     let patterns: [(regex: String, style: (inout AttributedString) -> Void)] = [
