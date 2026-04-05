@@ -75,7 +75,7 @@ export interface ContainerInfo {
 }
 
 let imageReady = false;
-const IMAGE_VERSION = '4'; // bump to force rebuild — added chromium via playwright
+const IMAGE_VERSION = '5'; // bump — chromium symlink baked into image
 
 export async function ensureImage(): Promise<void> {
   if (imageReady) return;

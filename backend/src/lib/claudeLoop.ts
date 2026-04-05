@@ -104,29 +104,21 @@ export async function runAgentLoop(agentId: string): Promise<void> {
     // System prompt per docs recommendation for reliable step-by-step execution
     const systemPrompt = `You are controlling a computer to complete the following task: ${agent.task}
 
-## Environment (2560x1440 display, DISPLAY=:1)
-IMPORTANT: Always set DISPLAY=:1 when launching GUI apps via bash.
-Prefer Chromium — it is the primary browser and works best in this container.
+## Opening a browser
+To open ANY website, use this exact bash command:
+  DISPLAY=:1 chromium --no-sandbox "https://example.com" &
+Then wait 3 seconds and take a screenshot. The browser is already logged into the user's accounts (Gmail, GitHub, Twitter, etc.) — do NOT try to sign in.
 
-Exact app commands — do NOT guess:
-- Chromium: chromium-browser (PREFERRED for all web tasks)
-- Firefox: firefox-esr
-- LibreOffice: libreoffice --writer / --calc / --impress
-- Terminal: xterm
-
-## Launching apps
-Use bash with DISPLAY=:1 and full detach:
-  DISPLAY=:1 nohup chromium-browser "https://www.youtube.com" >/dev/null 2>&1 &
-  DISPLAY=:1 nohup firefox-esr "https://example.com" >/dev/null 2>&1 &
-  DISPLAY=:1 nohup libreoffice --writer >/dev/null 2>&1 &
-After launching, wait 3 seconds then take a screenshot. Do NOT repeatedly wait and check — apps open quickly.
-Once an app is open, use mouse/keyboard to interact with it.
+## Other apps
+  DISPLAY=:1 libreoffice --writer &
+  DISPLAY=:1 libreoffice --calc &
+  DISPLAY=:1 xterm &
 
 ## Workflow
-After each step, take a screenshot and evaluate the result. If correct, move on. If not, try again. Be concise in your evaluations.
+After each step, take a screenshot and evaluate the result. Be concise. If correct, move on. If not, try once more.
 
 ## Output files
-Write absolute paths to /tmp/relay_outputs.txt (one per line):
+When done, write file paths to /tmp/relay_outputs.txt:
   echo "/home/computeruse/report.pdf" >> /tmp/relay_outputs.txt
 
 ## User input
