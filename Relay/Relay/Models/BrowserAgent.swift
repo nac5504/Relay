@@ -26,6 +26,13 @@ class BrowserAgent: Identifiable {
     var startedAt: Date?
     var planComplete: Bool = false
     var outputFiles: [String] = []
+    var planSteps: [PlanStep] = []
+
+    // Cursor overlay state — updated from WS "action" events
+    var cursorPosition: CGPoint? = nil      // normalized 0…1
+    var cursorActionType: String? = nil     // e.g. "left_click", "scroll", "type"
+    var cursorVisible: Bool = false
+    var cursorTimestamp: Date? = nil
 
     // Claude agent conversation
     var claudeHistory: [ClaudeService.Message] = []
@@ -53,7 +60,7 @@ class BrowserAgent: Identifiable {
 
     var noVNCURL: URL? {
         guard noVNCPort > 0 else { return nil }
-        return URL(string: "http://localhost:\(noVNCPort)/vnc_lite.html?autoconnect=true&resize=scale")
+        return URL(string: "http://localhost:\(noVNCPort)/vnc_lite.html?autoconnect=true&scale=true")
     }
 
     var formattedCost: String {
@@ -125,4 +132,10 @@ enum AgentStatus: String {
     case stopping
     case stopped
     case error
+}
+
+struct PlanStep: Identifiable {
+    let id: Int // 0-indexed step number
+    let title: String
+    var isCompleted: Bool = false
 }

@@ -26,15 +26,31 @@ final class AgentStore {
     func load() async {
         isLoading = true
         defer { isLoading = false }
+
+        // Push saved API key to backend before doing anything
+        let savedKey = UserDefaults.standard.string(forKey: "anthropic_api_key") ?? ""
+        if !savedKey.isEmpty {
+            try? await APIService.shared.setApiKey(savedKey)
+        }
+
         do {
             let responses = try await APIService.shared.fetchAgents()
             agents = responses.map { BrowserAgent(from: $0) }
         } catch {
             print("[AgentStore] Failed to load agents: \(error)")
         }
+
+        // Always summon a fresh agent on launch
+        if !savedKey.isEmpty {
+            do {
+                try await createAgent(task: nil)
+            } catch {
+                print("[AgentStore] Failed to auto-create agent: \(error)")
+            }
+        }
     }
 
-    func createAgent(task: String, agentName: String? = nil) async throws {
+    func createAgent(task: String? = nil, agentName: String? = nil) async throws {
         let response = try await APIService.shared.createAgent(task: task, agentName: agentName)
         let agent = BrowserAgent(from: response)
         // WS agent_added may have already added it
@@ -88,22 +104,33 @@ final class AgentStore {
         let text = rawText.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
 
-        if text.hasPrefix("/summon ") {
-            let remainder = text.dropFirst("/summon ".count).trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("/summon") {
+            let remainder = text.dropFirst("/summon".count).trimmingCharacters(in: .whitespaces)
             let tokens = remainder.split(separator: " ", maxSplits: 1)
-            let name: String? = tokens.first.map(String.init)
-            let task = tokens.count > 1 ? String(tokens[1]) : remainder
+            let name: String? = tokens.isEmpty ? nil : String(tokens[0])
+            let task: String? = tokens.count > 1 ? String(tokens[1]) : nil
             mainChatMessages.append(ChatMessage(role: .user, text: text))
             try await createAgent(task: task, agentName: name)
-        } else if let agent = focusedAgent {
-            // Focused agent — route to it (backend handles plan vs computer use routing)
+        } else if text.hasPrefix("/stop") {
+            let targetName = text.dropFirst("/stop".count).trimmingCharacters(in: .whitespaces)
             mainChatMessages.append(ChatMessage(role: .user, text: text))
-            try await sendMessage(to: agent, text: text)
-        } else if let planningAgent = agents.first(where: { $0.relayStatus.isPlanningPhase }) {
-            // Not focused but there's a planning agent — route to it
-            mainChatMessages.append(ChatMessage(role: .user, text: text))
-            try await sendMessage(to: planningAgent, text: text)
+            if !targetName.isEmpty, let agent = agents.first(where: { $0.agentName.lowercased() == targetName.lowercased() }) {
+                let name = agent.agentName
+                try await deleteAgent(agent)
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "Stopped **\(name)**."))
+            } else if let agent = focusedAgent {
+                let name = agent.agentName
+                try await deleteAgent(agent)
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "Stopped **\(name)**."))
+            } else if let agent = agents.last {
+                let name = agent.agentName
+                try await deleteAgent(agent)
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "Stopped **\(name)**."))
+            } else {
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "No agents to stop."))
+            }
         } else if text.hasPrefix("@") {
+            // @mention takes priority over focused/planning agent
             let parts = text.dropFirst().split(separator: " ", maxSplits: 1)
             let name = parts.first.map(String.init) ?? ""
             let message = parts.count > 1 ? String(parts[1]) : ""
@@ -116,6 +143,14 @@ final class AgentStore {
                 mainChatMessages.append(ChatMessage(role: .user, text: text))
                 mainChatMessages.append(ChatMessage(role: .assistant, text: "No agent named \"\(name)\". Use /summon \(name) <task>"))
             }
+        } else if let agent = focusedAgent {
+            // Focused agent — route to it
+            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            try await sendMessage(to: agent, text: text)
+        } else if let planningAgent = agents.first(where: { $0.relayStatus.isPlanningPhase }) {
+            // Planning agent fallback
+            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            try await sendMessage(to: planningAgent, text: text)
         } else {
             mainChatMessages.append(ChatMessage(role: .user, text: text))
             if agents.isEmpty {
@@ -167,7 +202,11 @@ final class AgentStore {
     }
 
     func appendChatMessage(agentId: String, role: String, text: String) {
-        guard let agent = findAgent(id: agentId) else { return }
+        guard let agent = findAgent(id: agentId) else {
+            print("[AgentStore] appendChatMessage: agent \(agentId) NOT FOUND — dropping \(role): \(text.prefix(60))")
+            return
+        }
+        print("[AgentStore] appendChatMessage: agent=\(agent.agentName) role=\(role) text=\(text.prefix(60))")
         let chatRole: ChatMessage.Role
         let displayText: String
 
@@ -176,10 +215,13 @@ final class AgentStore {
             chatRole = .user
             displayText = text
         case "thinking":
-            chatRole = .system
-            displayText = "Thinking: \(text)"
+            chatRole = .thinking
+            displayText = text
         case "action":
-            chatRole = .system
+            chatRole = .action
+            displayText = text
+        case "output":
+            chatRole = .output
             displayText = text
         default:
             chatRole = .assistant
@@ -192,6 +234,31 @@ final class AgentStore {
         if role != "user" {
             mainChatMessages.append(msg)
         }
+    }
+
+    func updateAgentCursor(agentId: String, x: Double, y: Double, screenWidth: Double, screenHeight: Double, actionType: String) {
+        guard let agent = findAgent(id: agentId) else { return }
+        let normalized = CGPoint(x: x / screenWidth, y: y / screenHeight)
+        agent.cursorPosition = normalized
+        agent.cursorActionType = actionType
+        agent.cursorVisible = true
+        agent.cursorTimestamp = Date()
+
+        // Auto-hide cursor after 3 seconds of no activity
+        let ts = agent.cursorTimestamp
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak agent] in
+            guard let agent, agent.cursorTimestamp == ts else { return }
+            withAnimation(.easeOut(duration: 0.5)) {
+                agent.cursorVisible = false
+            }
+        }
+    }
+
+    func appendErrorMessage(agentId: String, text: String) {
+        guard let agent = findAgent(id: agentId) else { return }
+        let msg = ChatMessage(role: .system, text: text, agentName: agent.agentName, isError: true)
+        agent.chatMessages.append(msg)
+        mainChatMessages.append(msg)
     }
 
     func upsertAgentFromJSON(_ json: [String: Any]) {

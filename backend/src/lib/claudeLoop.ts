@@ -46,6 +46,48 @@ function describeAction(toolInput: ComputerToolInput): string {
   }
 }
 
+function parsePlanSteps(planText: string): string[] {
+  const lines = planText.split('\n');
+  const steps: string[] = [];
+  for (const line of lines) {
+    const match = line.match(/^\s*(\d+)\.\s+(.+)/);
+    if (match) steps.push(match[2].trim());
+  }
+  return steps;
+}
+
+function detectCompletedSteps(text: string, steps: string[], alreadyCompleted: Set<number>): number[] {
+  const lower = text.toLowerCase();
+  const completed: number[] = [];
+
+  // Look for "step N" references with positive language
+  const stepRefs = lower.matchAll(/step\s+(\d+)/g);
+  for (const m of stepRefs) {
+    const stepNum = parseInt(m[1], 10) - 1; // 0-indexed
+    if (stepNum >= 0 && stepNum < steps.length && !alreadyCompleted.has(stepNum)) {
+      // Check for positive evaluation nearby
+      const pos = m.index!;
+      const context = lower.slice(pos, pos + 200);
+      if (context.match(/correct|done|complete|success|achiev|verified|confirm|moved on|moving on|proceed/)) {
+        completed.push(stepNum);
+      }
+    }
+  }
+
+  // Also detect "I have evaluated" pattern
+  if (lower.includes('evaluated') && lower.match(/correct|success|done|moving/)) {
+    const stepMatch = lower.match(/step\s+(\d+)/);
+    if (stepMatch) {
+      const idx = parseInt(stepMatch[1], 10) - 1;
+      if (idx >= 0 && idx < steps.length && !alreadyCompleted.has(idx) && !completed.includes(idx)) {
+        completed.push(idx);
+      }
+    }
+  }
+
+  return completed;
+}
+
 export async function runAgentLoop(agentId: string): Promise<void> {
   const agent = registry.get(agentId);
   if (!agent) return;
@@ -62,12 +104,33 @@ export async function runAgentLoop(agentId: string): Promise<void> {
     // System prompt per docs recommendation for reliable step-by-step execution
     const systemPrompt = `You are controlling a computer to complete the following task: ${agent.task}
 
-After each step, take a screenshot and carefully evaluate if you have achieved the right outcome. Explicitly show your thinking: "I have evaluated step X..." If not correct, try again. Only when you confirm a step was executed correctly should you move on to the next one.
+## Environment (2560x1440 display, DISPLAY=:1)
+IMPORTANT: Always set DISPLAY=:1 when launching GUI apps via bash.
+Prefer Chromium — it is the primary browser and works best in this container.
 
-When you produce output files the user should receive (documents, images, spreadsheets, etc.), write their absolute paths to /tmp/relay_outputs.txt inside the container, one path per line:
+Exact app commands — do NOT guess:
+- Chromium: chromium-browser (PREFERRED for all web tasks)
+- Firefox: firefox-esr
+- LibreOffice: libreoffice --writer / --calc / --impress
+- Terminal: xterm
+
+## Launching apps
+Use bash with DISPLAY=:1 and full detach:
+  DISPLAY=:1 nohup chromium-browser "https://www.youtube.com" >/dev/null 2>&1 &
+  DISPLAY=:1 nohup firefox-esr "https://example.com" >/dev/null 2>&1 &
+  DISPLAY=:1 nohup libreoffice --writer >/dev/null 2>&1 &
+After launching, wait 3 seconds then take a screenshot. Do NOT repeatedly wait and check — apps open quickly.
+Once an app is open, use mouse/keyboard to interact with it.
+
+## Workflow
+After each step, take a screenshot and evaluate the result. If correct, move on. If not, try again. Be concise in your evaluations.
+
+## Output files
+Write absolute paths to /tmp/relay_outputs.txt (one per line):
   echo "/home/computeruse/report.pdf" >> /tmp/relay_outputs.txt
 
-If you need clarification or reach a decision point requiring user input, say "Waiting for input:" followed by your question and stop.`;
+## User input
+If you need clarification, say "Waiting for input:" followed by your question and stop.`;
 
     const messages: AnthropicMessage[] = [{
       role: 'user',
@@ -78,6 +141,13 @@ If you need clarification or reach a decision point requiring user input, say "W
 
     registry.update(agentId, { status: 'working', messages });
     wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: agent.cost });
+
+    // Parse plan into numbered steps and broadcast task list
+    const planSteps = parsePlanSteps(agent.task);
+    if (planSteps.length > 0) {
+      wsHub.broadcast({ type: 'task_list', agentId, steps: planSteps });
+    }
+    const completedSteps = new Set<number>();
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -108,8 +178,8 @@ If you need clarification or reach a decision point requiring user input, say "W
             {
               type: TOOL_TYPE,
               name: 'computer',
-              display_width_px: 1024,
-              display_height_px: 768,
+              display_width_px: 2560,
+              display_height_px: 1440,
               display_number: 1,
             } satisfies BetaToolComputerUse20251124,
             {
@@ -127,7 +197,7 @@ If you need clarification or reach a decision point requiring user input, say "W
       } catch (err) {
         console.error(`Claude API error for agent ${agentId}:`, (err as Error).message);
         registry.update(agentId, { status: 'error', error: (err as Error).message });
-        wsHub.broadcast({ type: 'agent_update', agentId, status: 'error' });
+        wsHub.broadcast({ type: 'agent_update', agentId, status: 'error', error: (err as Error).message });
         break;
       }
 
@@ -138,10 +208,19 @@ If you need clarification or reach a decision point requiring user input, say "W
 
       messages.push({ role: 'assistant', content: response.content as AnthropicMessage['content'] });
 
-      // Broadcast text blocks; detect waiting-for-input state
+      // Broadcast text blocks; detect step completions and waiting-for-input state
       for (const block of response.content) {
         if (block.type === 'text' && block.text.trim()) {
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'assistant', text: block.text, timestamp: new Date().toISOString() });
+
+          // Detect step completions from Claude's evaluation text
+          if (planSteps.length > 0) {
+            const newlyCompleted = detectCompletedSteps(block.text, planSteps, completedSteps);
+            for (const stepIdx of newlyCompleted) {
+              completedSteps.add(stepIdx);
+              wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepIdx, completed: true });
+            }
+          }
 
           if (response.stop_reason === 'end_turn') {
             const lower = block.text.toLowerCase();
@@ -227,6 +306,11 @@ If you need clarification or reach a decision point requiring user input, say "W
           wsHub.broadcast({ type: 'action', agentId, event });
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'action', text: event.description, timestamp: new Date().toISOString() });
 
+          // Send bash output to frontend
+          if (output.trim()) {
+            wsHub.broadcast({ type: 'chat_message', agentId, role: 'output', text: output.trim().slice(0, 2000), timestamp: new Date().toISOString() });
+          }
+
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: output }] });
 
         } else if (block.name === 'str_replace_based_edit_tool') {
@@ -253,7 +337,7 @@ If you need clarification or reach a decision point requiring user input, say "W
   } catch (err) {
     console.error(`Agent loop error (${agentId}):`, err);
     registry.update(agentId, { status: 'error', error: (err as Error).message });
-    wsHub.broadcast({ type: 'agent_update', agentId, status: 'error' });
+    wsHub.broadcast({ type: 'agent_update', agentId, status: 'error', error: (err as Error).message });
   } finally {
     const finalAgent = registry.get(agentId);
     if (finalAgent?.recordingProc) {

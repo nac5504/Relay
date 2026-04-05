@@ -24,9 +24,9 @@ os.environ.setdefault("DISPLAY_NUM", "1")
 
 async def run_tool(tool_name: str, tool_input: dict) -> dict:
     """Run an Anthropic tool and return the result as JSON."""
-    from computer_use_demo.tools.computer import ComputerTool
-    from computer_use_demo.tools.bash import BashTool
-    from computer_use_demo.tools.edit import EditTool
+    from computer_use_demo.tools.computer import ComputerTool20251124 as ComputerTool
+    from computer_use_demo.tools.bash import BashTool20250124 as BashTool
+    from computer_use_demo.tools.edit import EditTool20250728 as EditTool
 
     if tool_name == "screenshot":
         tool = ComputerTool()

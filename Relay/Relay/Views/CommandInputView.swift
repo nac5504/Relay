@@ -147,6 +147,8 @@ struct CommandInputView: View {
     @State private var keyMonitor: Any?
     @State private var attachedImages: [NSImage] = []
     @State private var isFocused = false
+    @AppStorage("voice_enabled") private var voiceEnabled = true
+    private let voiceManager = VoiceInputManager.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -227,6 +229,21 @@ struct CommandInputView: View {
                     }
                 }
 
+                if voiceManager.isListening {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 8, height: 8)
+                        Text("Listening — auto-sends on pause")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.5))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
                 HighlightedTextEditor(text: $text, placeholder: placeholder, onFocusChange: { isFocused = $0 })
                     .frame(minHeight: 36, maxHeight: 80)
                     .padding(.top, 8)
@@ -255,6 +272,16 @@ struct CommandInputView: View {
                             .foregroundStyle(.white.opacity(0.4))
                     }
                     .buttonStyle(.plain)
+
+                    if voiceEnabled {
+                        Button { toggleVoice() } label: {
+                            Image(systemName: voiceManager.isListening ? "mic.fill" : "mic")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(voiceManager.isListening ? .red : .white.opacity(0.4))
+                                .symbolEffect(.pulse, isActive: voiceManager.isListening)
+                        }
+                        .buttonStyle(.plain)
+                    }
 
                     Spacer()
 
@@ -359,6 +386,24 @@ struct CommandInputView: View {
         attachedImages = []
         showSuggestions = false
         onSend(t)
+    }
+
+    private func toggleVoice() {
+        if voiceManager.isListening {
+            voiceManager.stopListening()
+        } else {
+            Task {
+                guard await voiceManager.requestPermissions() else { return }
+                voiceManager.startListening(
+                    onUpdate: { processed in
+                        self.text = processed
+                    },
+                    onSend: {
+                        self.send()
+                    }
+                )
+            }
+        }
     }
 
     private func enforceLockedPrefix(_ newText: String) {

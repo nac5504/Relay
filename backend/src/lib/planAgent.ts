@@ -7,14 +7,32 @@ const MODEL = 'claude-sonnet-4-6';
 
 const ENVIRONMENT_CONTEXT = `
 The computer use agent runs inside a Linux Docker container with the following environment:
-- Display: 1024x768 virtual desktop (Xvfb)
-- Browser: Chromium (chromium-browser), Firefox ESR available
-- Office suite: LibreOffice (Writer, Calc, Impress, Draw)
-- Text editors: nano, vim, gedit
-- Shell: bash with standard Unix utilities
+
+Display: 2560x1440 virtual desktop (Xvfb on DISPLAY=:1)
+
+## Exact application commands (use these — do NOT guess)
+IMPORTANT: Always prefix with DISPLAY=:1. Prefer Chromium for all web tasks.
+- Chromium (PREFERRED): DISPLAY=:1 chromium-browser
+- Firefox: DISPLAY=:1 firefox-esr
+- LibreOffice Writer: DISPLAY=:1 libreoffice --writer
+- LibreOffice Calc: DISPLAY=:1 libreoffice --calc
+- LibreOffice Impress: DISPLAY=:1 libreoffice --impress
+- File manager: DISPLAY=:1 nautilus
+- Text editor (GUI): DISPLAY=:1 gedit
+- Text editor (terminal): nano, vim
+- Terminal: xterm
+
+## Opening URLs directly (fastest approach)
+- DISPLAY=:1 chromium-browser "https://www.youtube.com" &
+- DISPLAY=:1 firefox-esr "https://www.google.com" &
+
+## Shell & tools
+- bash with standard Unix utilities (curl, wget, python3, pip, git)
 - Python 3 with pip
 - Internet access: yes
-- Output files: the agent can write any file and mark it for retrieval by appending its absolute path to /tmp/relay_outputs.txt (one path per line)
+
+## Output files
+The agent can write any file and mark it for retrieval by appending its absolute path to /tmp/relay_outputs.txt (one path per line).
 
 The agent controls the computer by taking screenshots and using mouse/keyboard actions. It works best with clear, numbered step-by-step instructions.
 `.trim();
@@ -53,18 +71,44 @@ export async function runPlanAgent(
 
   const client = new Anthropic({ apiKey: getApiKey() });
 
-  const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: agent.task },
-  ];
+  const messages: Anthropic.MessageParam[] = [];
 
-  // Echo initial task to UI
-  wsHub.broadcast({
-    type: 'plan_message',
-    agentId,
-    role: 'user',
-    text: agent.task,
-    timestamp: new Date().toISOString(),
-  });
+  if (agent.task) {
+    // Task provided up front — send it as the first user message
+    messages.push({ role: 'user', content: agent.task });
+    wsHub.broadcast({
+      type: 'plan_message',
+      agentId,
+      role: 'user',
+      text: agent.task,
+      timestamp: new Date().toISOString(),
+    });
+  } else {
+    // No task yet — greet and wait for the user's first message
+    const greeting = "What would you like me to work on?";
+    wsHub.broadcast({
+      type: 'plan_message',
+      agentId,
+      role: 'assistant',
+      text: greeting,
+      timestamp: new Date().toISOString(),
+    });
+
+    console.log(`[planAgent] No task — waiting for initial message for ${agentId}...`);
+    const firstMsg = await pollForMessage(agentId, 600_000);
+    if (!firstMsg) { console.log(`[planAgent] No initial message — exiting`); return; }
+
+    pendingMessages.delete(agentId);
+    registry.update(agentId, { task: firstMsg });
+    messages.push({ role: 'user', content: firstMsg });
+    wsHub.broadcast({
+      type: 'plan_message',
+      agentId,
+      role: 'user',
+      text: firstMsg,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   while (true) {
     if (cancelledAgents.has(agentId)) {

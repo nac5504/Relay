@@ -9,5 +9,9 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Relay needs microphone access for voice commands to your agents.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Relay uses speech recognition to let you control agents with your voice.</string>
 </dict>
 </plist>
