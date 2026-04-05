@@ -139,6 +139,11 @@ final class WebSocketManager: @unchecked Sendable {
                 }
                 // Chat text is handled via "chat_message" with role:"action"
 
+            case "agent_title":
+                guard let agentId = json["agentId"] as? String,
+                      let title = json["title"] as? String else { return }
+                store.updateAgent(id: agentId) { $0.taskTitle = title }
+
             case "agent_added":
                 if let agentData = json["agent"] as? [String: Any] {
                     store.upsertAgentFromJSON(agentData)

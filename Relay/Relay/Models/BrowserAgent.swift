@@ -15,6 +15,7 @@ class BrowserAgent: Identifiable {
     // Relay agent management fields
     var agentName: String = ""
     var task: String = ""
+    var taskTitle: String = ""  // AI-generated 3-5 word summary
     var tasks: [AgentTask] = []
     var relayStatus: RelayAgentStatus = .notStarted
     var chatMessages: [ChatMessage] = []
@@ -55,7 +56,8 @@ class BrowserAgent: Identifiable {
 
     /// Short description of what the agent is doing right now
     var currentTaskName: String {
-        currentTask?.name ?? (task.isEmpty ? (tasks.last?.name ?? "Idle") : task)
+        if !taskTitle.isEmpty { return taskTitle }
+        return currentTask?.name ?? (task.isEmpty ? (tasks.last?.name ?? "Idle") : task)
     }
 
     var noVNCURL: URL? {

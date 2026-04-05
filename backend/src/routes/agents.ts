@@ -83,6 +83,16 @@ router.post('/', async (req: Request, res: Response) => {
   wsHub.broadcast({ type: 'agent_added', agent: summarize(agent) });
   res.status(201).json(summarize(agent));
 
+  // Generate a short title in the background (non-blocking)
+  if (task) {
+    generateTaskTitle(task).then((title) => {
+      if (title) {
+        wsHub.broadcast({ type: 'agent_title', agentId, title });
+        console.log(`[agents] Title for ${agentId}: "${title}"`);
+      }
+    }).catch(() => {});
+  }
+
   setImmediate(async () => {
     let containerAssigned = false;
 
@@ -233,6 +243,24 @@ const NAME_POOL = ['Atlas', 'Nova', 'Sage', 'Echo', 'Pixel', 'Bolt', 'Onyx', 'Fl
 let nameIdx = 0;
 function generateName(): string {
   return NAME_POOL[nameIdx++ % NAME_POOL.length];
+}
+
+async function generateTaskTitle(task: string): Promise<string | null> {
+  try {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const client = new Anthropic({ apiKey: getApiKey() });
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 30,
+      messages: [{ role: 'user', content: task }],
+      system: 'Summarize this task in 3-5 words as a short title. Return ONLY the title, nothing else. Examples: "Email summary spreadsheet", "Research competitor pricing", "Draft blog post"',
+    });
+    const text = response.content[0]?.type === 'text' ? response.content[0].text.trim() : null;
+    return text?.replace(/^["']|["']$/g, '') ?? null; // strip quotes if any
+  } catch (err) {
+    console.warn(`[agents] Title generation failed: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 export default router;
