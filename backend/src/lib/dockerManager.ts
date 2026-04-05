@@ -122,6 +122,14 @@ export async function startContainer(agentId: string, sessionId: string, chromeP
   args.push(RELAY_IMAGE);
   await dockerRun(args);
 
+  // Fix permissions on mounted Chrome profile (volume mounts as root)
+  if (chromeProfilePath) {
+    await dockerRun(['exec', '-u', 'root', containerName, 'chown', '-R', 'computeruse:computeruse', '/home/computeruse/.config/chromium']);
+    // Also create the symlink for chromium binary
+    await dockerRun(['exec', '-u', 'root', containerName, 'bash', '-c',
+      'ln -sf $(find /home/computeruse/.cache/ms-playwright -name "chrome" -path "*/chrome-linux/chrome" -type f 2>/dev/null | head -1) /usr/local/bin/chromium 2>/dev/null || true']);
+  }
+
   return { containerName, noVNCPort: ports.noVNC, vncPort: ports.vnc };
 }
 

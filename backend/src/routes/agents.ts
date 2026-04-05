@@ -62,7 +62,7 @@ router.post('/', async (req: Request, res: Response) => {
   const agent = registry.create(agentId, {
     id: agentId,
     agentName: name,
-    task: resolvedTask,
+    task: task ?? '',
     status: 'starting',
     containerName: null,
     noVNCPort: null,
@@ -77,7 +77,7 @@ router.post('/', async (req: Request, res: Response) => {
     error: null,
   });
 
-  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${resolvedTask.slice(0, 60) || '(awaiting)'}"`);
+  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${(task ?? '').slice(0, 60) || '(awaiting)'}"`);
   wsHub.broadcast({ type: 'agent_added', agent: summarize(agent) });
   res.status(201).json(summarize(agent));
 
