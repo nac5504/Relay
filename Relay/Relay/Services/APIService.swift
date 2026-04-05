@@ -81,8 +81,8 @@ final class APIService: Sendable {
         try await get("/agents")
     }
 
-    func createAgent(task: String, agentName: String? = nil) async throws -> AgentResponse {
-        struct Body: Encodable { let task: String; let agentName: String? }
+    func createAgent(task: String? = nil, agentName: String? = nil) async throws -> AgentResponse {
+        struct Body: Encodable { let task: String?; let agentName: String? }
         return try await post("/agents", body: Body(task: task, agentName: agentName))
     }
 
@@ -93,6 +93,19 @@ final class APIService: Sendable {
     func sendMessage(agentId: String, text: String) async throws {
         struct Body: Encodable { let text: String }
         _ = try await request("/agents/\(agentId.lowercased())/message", method: "POST", body: Body(text: text))
+    }
+
+    // MARK: - Docker
+
+    func checkDockerImage() async throws -> Bool {
+        struct Resp: Decodable { let imageExists: Bool }
+        let resp: Resp = try await get("/docker/status")
+        return resp.imageExists
+    }
+
+    func buildDockerImage(force: Bool = true) async throws {
+        struct Body: Encodable { let force: Bool }
+        _ = try await request("/docker/build", method: "POST", body: Body(force: force))
     }
 
     // MARK: - Recordings & Outputs

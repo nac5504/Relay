@@ -49,6 +49,19 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
         }
     }
 
+    var sidebarLabel: String {
+        switch self {
+        case .notStarted: return "Idle"
+        case .starting:   return "Starting"
+        case .planning:   return "Planning"
+        case .working:    return "Acting"
+        case .waiting:    return "Waiting"
+        case .completed:  return "Done"
+        case .error:      return "Error"
+        case .stopped:    return "Stopped"
+        }
+    }
+
     var isPlanningPhase: Bool {
         self == .starting || self == .planning
     }

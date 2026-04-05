@@ -7,6 +7,7 @@ import * as wsHub from './lib/wsHub';
 import * as appConfig from './lib/config';
 import agentsRouter from './routes/agents';
 import recordingsRouter from './routes/recordings';
+import dockerRouter from './routes/docker';
 import { cleanupStale } from './lib/dockerManager';
 
 const app = express();
@@ -20,6 +21,7 @@ app.use(express.json());
 
 app.use('/agents', agentsRouter);
 app.use('/recordings', recordingsRouter);
+app.use('/docker', dockerRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

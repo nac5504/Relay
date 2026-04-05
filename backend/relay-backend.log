@@ -1,0 +1,17 @@
+
+> relay-backend@1.0.0 dev
+> tsx watch src/server.ts
+
+Relay backend listening on http://localhost:3001
+[startup] Stale containers cleaned up
+[config] API key set
+[agents] Created agent 496c9b0f-c603-43bf-90a3-9558bcdf3f60 (Atlas) — task: "(awaiting)"
+[ws] broadcast agent_added to 1 clients
+[agents] Starting plan agent for 496c9b0f-c603-43bf-90a3-9558bcdf3f60
+[ws] broadcast plan_message to 1 clients
+[planAgent] No task — waiting for initial message for 496c9b0f-c603-43bf-90a3-9558bcdf3f60...
+[agents] Starting container for 496c9b0f-c603-43bf-90a3-9558bcdf3f60
+[docker] Image relay-agent:v4 already exists
+[agents] Container relay-agent-496c9b0fc603 started — noVNC:17900 VNC:17901
+[ws] broadcast agent_update to 1 clients
+[agents] Waiting for container ready on port 17900...

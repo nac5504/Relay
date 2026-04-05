@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import { existsSync } from 'fs';
@@ -59,8 +59,12 @@ async function dockerRun(args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-export async function execInContainer(containerName: string, shellCmd: string): Promise<string> {
-  const { stdout } = await execFileAsync(DOCKER, ['exec', containerName, 'bash', '-c', shellCmd], { env: DOCKER_ENV });
+export async function execInContainer(containerName: string, shellCmd: string, timeoutMs = 30_000): Promise<string> {
+  const { stdout } = await execFileAsync(DOCKER, ['exec', containerName, 'bash', '-c', shellCmd], {
+    env: DOCKER_ENV,
+    timeout: timeoutMs,
+    maxBuffer: 10 * 1024 * 1024,
+  });
   return stdout;
 }
 
@@ -104,8 +108,8 @@ export async function startContainer(agentId: string, sessionId: string, chromeP
     '-p', `${ports.vnc}:5900`,
     '-v', `${recordingsPath}:/recordings`,
     '-e', `ANTHROPIC_API_KEY=${getApiKey()}`,
-    '-e', 'WIDTH=1024',
-    '-e', 'HEIGHT=768',
+    '-e', 'WIDTH=2560',
+    '-e', 'HEIGHT=1440',
     '--shm-size=2g',
   ];
 
@@ -180,13 +184,71 @@ export async function waitForReady(noVNCPort: number, timeoutMs = 60_000): Promi
   while (Date.now() < deadline) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-      if (res.ok) return;
+      if (res.ok) {
+        // VNC WebSocket proxy (websockify) starts after the HTTP server —
+        // wait for it to fully initialize before signaling readiness
+        await new Promise<void>((r) => setTimeout(r, 3000));
+        return;
+      }
     } catch {
       // not ready yet
     }
     await new Promise<void>((r) => setTimeout(r, 1000));
   }
   throw new Error(`Container noVNC not ready on port ${noVNCPort} after ${timeoutMs}ms`);
+}
+
+export function resetImageReady(): void {
+  imageReady = false;
+}
+
+export async function checkImageExists(): Promise<boolean> {
+  try {
+    const out = await dockerRun(['images', '-q', `${RELAY_IMAGE}:v${IMAGE_VERSION}`]);
+    return out.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function getImageTag(): string {
+  return `${RELAY_IMAGE}:v${IMAGE_VERSION}`;
+}
+
+export async function buildImageStreaming(onLine: (line: string) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(DOCKER, ['build', '-t', `${RELAY_IMAGE}:v${IMAGE_VERSION}`, '-t', RELAY_IMAGE, DOCKER_DIR], {
+      env: DOCKER_ENV,
+    });
+
+    let stderr = '';
+
+    const processData = (data: Buffer) => {
+      const lines = data.toString().split('\n').filter(Boolean);
+      for (const line of lines) {
+        onLine(line);
+      }
+    };
+
+    proc.stdout.on('data', processData);
+    proc.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+      processData(data);
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        imageReady = true;
+        resolve();
+      } else {
+        reject(new Error(`Docker build failed (exit ${code}): ${stderr.slice(-500)}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(err);
+    });
+  });
 }
 
 export async function cleanupStale(): Promise<void> {

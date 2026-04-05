@@ -62,7 +62,7 @@ router.post('/', async (req: Request, res: Response) => {
   const agent = registry.create(agentId, {
     id: agentId,
     agentName: name,
-    task,
+    task: resolvedTask,
     status: 'starting',
     containerName: null,
     noVNCPort: null,
@@ -77,7 +77,7 @@ router.post('/', async (req: Request, res: Response) => {
     error: null,
   });
 
-  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${task.slice(0, 60)}"`);
+  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${resolvedTask.slice(0, 60) || '(awaiting)'}"`);
   wsHub.broadcast({ type: 'agent_added', agent: summarize(agent) });
   res.status(201).json(summarize(agent));
 
@@ -118,7 +118,7 @@ router.post('/', async (req: Request, res: Response) => {
       const { containerName, noVNCPort, vncPort } = await docker.startContainer(agentId, sessionId, chromeProfilePath);
       console.log(`[agents] Container ${containerName} started — noVNC:${noVNCPort} VNC:${vncPort}`);
       registry.update(agentId, { containerName, noVNCPort, vncPort });
-      wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', noVNCPort, vncPort, cost: 0 });
+      wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', cost: 0 });
 
       console.log(`[agents] Waiting for container ready on port ${noVNCPort}...`);
       await docker.waitForReady(noVNCPort);
@@ -131,7 +131,7 @@ router.post('/', async (req: Request, res: Response) => {
     } catch (err) {
       console.error(`[agents] Container start failed for ${agentId}:`, err);
       registry.update(agentId, { status: 'error', error: (err as Error).message });
-      wsHub.broadcast({ type: 'agent_update', agentId, status: 'error' });
+      wsHub.broadcast({ type: 'agent_update', agentId, status: 'error', error: (err as Error).message });
     }
   });
 });

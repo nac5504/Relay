@@ -3,9 +3,6 @@ import SwiftUI
 struct SidebarView: View {
     let store: AgentStore
     @State private var showSettings = false
-    @State private var showNewAgentSheet = false
-    @State private var newTaskText = ""
-    @State private var isCreating = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,25 +53,6 @@ struct SidebarView: View {
 
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
 
-            // New Task button
-            Button { showNewAgentSheet = true } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "plus.circle")
-                        .font(.system(.body, design: .monospaced))
-                        .frame(width: 20)
-                    Text("New Task")
-                        .font(.system(.callout, design: .monospaced))
-                    Spacer()
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.6))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-
             Button { showSettings = true } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "gearshape")
@@ -101,52 +79,6 @@ struct SidebarView: View {
         )
         .sheet(isPresented: $showSettings) {
             SettingsView()
-        }
-        .sheet(isPresented: $showNewAgentSheet) {
-            VStack(spacing: 16) {
-                Text("New Agent Task")
-                    .font(.system(.headline, design: .monospaced))
-                    .foregroundStyle(.white)
-
-                TextEditor(text: $newTaskText)
-                    .font(.system(.body, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .frame(height: 120)
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.white.opacity(0.04))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.1)))
-                    )
-
-                HStack {
-                    Button("Cancel") {
-                        showNewAgentSheet = false
-                        newTaskText = ""
-                    }
-                    Spacer()
-                    Button(isCreating ? "Starting..." : "Create") {
-                        isCreating = true
-                        Task {
-                            do {
-                                try await store.createAgent(task: newTaskText)
-                                isCreating = false
-                                showNewAgentSheet = false
-                                newTaskText = ""
-                            } catch {
-                                print("[SidebarView] Create agent failed: \(error)")
-                                isCreating = false
-                            }
-                        }
-                    }
-                    .disabled(newTaskText.trimmingCharacters(in: .whitespaces).isEmpty || isCreating)
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-            .padding(24)
-            .frame(width: 420)
-            .background(Color(white: 0.08))
-            .preferredColorScheme(.dark)
         }
         .overlay(
             Rectangle()
@@ -209,9 +141,14 @@ private struct AgentSidebarRow: View {
 
                     Spacer()
 
-                    Circle()
-                        .fill(agent.relayStatus.dotColor)
-                        .frame(width: 8, height: 8)
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(agent.relayStatus.dotColor)
+                            .frame(width: 6, height: 6)
+                        Text(agent.relayStatus.sidebarLabel)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(agent.relayStatus.dotColor.opacity(0.8))
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
