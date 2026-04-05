@@ -49,9 +49,10 @@ struct BrowserStreamView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        // Don't reload if already loading or loaded with the correct port
-        guard let currentPort = webView.url?.port, currentPort != agent.noVNCPort else { return }
-        if let url = agent.noVNCURL {
+        guard let url = agent.noVNCURL else { return }
+        // Reload if no URL loaded yet or port changed
+        let currentPort = webView.url?.port
+        if currentPort == nil || currentPort != agent.noVNCPort {
             webView.load(URLRequest(url: url))
         }
     }
@@ -110,30 +111,38 @@ struct BrowserStreamView: NSViewRepresentable {
     })();
     """
 
-    /// Monitors noVNC connection state and forces reconnect on initial failure
+    /// Auto-reconnect for vnc_lite.html — monitors the RFB object and reconnects on failure
     private static let autoReconnectJS = """
     (function() {
-        let retryCount = 0;
-        const maxRetries = 20;
-        const retryInterval = 1500;
+        var retries = 0;
+        var maxRetries = 30;
 
-        function tryConnect() {
-            if (retryCount >= maxRetries) return;
-            // noVNC exposes its UI object on the page
-            const connectBtn = document.getElementById('noVNC_connect_button');
-            const statusEl = document.querySelector('#noVNC_status');
-            const isDisconnected = document.querySelector('.noVNC_status_error') ||
-                                   (statusEl && statusEl.textContent.toLowerCase().includes('disconnect')) ||
-                                   (statusEl && statusEl.textContent.toLowerCase().includes('failed'));
+        function checkAndReconnect() {
+            if (retries >= maxRetries) return;
 
-            if (connectBtn && isDisconnected) {
-                retryCount++;
-                connectBtn.click();
+            // vnc_lite.html stores the RFB instance
+            var rfb = window.rfb;
+            if (!rfb) {
+                // RFB not created yet — page still loading, try again
+                retries++;
+                setTimeout(checkAndReconnect, 2000);
+                return;
             }
+
+            var state = rfb._rfbConnectionState || rfb.connectionState;
+            if (state === 'disconnected' || state === 'failed') {
+                retries++;
+                console.log('noVNC reconnect attempt ' + retries);
+                // Reload the page to get a fresh connection
+                window.location.reload();
+            } else {
+                retries = 0; // reset on success
+            }
+
+            setTimeout(checkAndReconnect, 3000);
         }
 
-        // Poll for disconnection/failure and auto-click connect
-        setInterval(tryConnect, retryInterval);
+        setTimeout(checkAndReconnect, 3000);
     })();
     """
 

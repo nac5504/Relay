@@ -71,22 +71,23 @@ export interface ContainerInfo {
 }
 
 let imageReady = false;
+const IMAGE_VERSION = '2'; // bump to force rebuild
 
 export async function ensureImage(): Promise<void> {
   if (imageReady) return;
   try {
-    const out = await dockerRun(['images', '-q', RELAY_IMAGE]);
+    const out = await dockerRun(['images', '-q', `${RELAY_IMAGE}:v${IMAGE_VERSION}`]);
     if (out.length > 0) {
       imageReady = true;
-      console.log(`[docker] Image ${RELAY_IMAGE} already exists`);
+      console.log(`[docker] Image ${RELAY_IMAGE}:v${IMAGE_VERSION} already exists`);
       return;
     }
   } catch { /* no image */ }
 
-  console.log(`[docker] Building ${RELAY_IMAGE} image (one-time, installs ffmpeg + scrot)...`);
-  await dockerRun(['build', '-t', RELAY_IMAGE, DOCKER_DIR]);
+  console.log(`[docker] Building ${RELAY_IMAGE}:v${IMAGE_VERSION} image (one-time, installs ffmpeg + scrot + chromium)...`);
+  await dockerRun(['build', '-t', `${RELAY_IMAGE}:v${IMAGE_VERSION}`, '-t', RELAY_IMAGE, DOCKER_DIR]);
   imageReady = true;
-  console.log(`[docker] Image ${RELAY_IMAGE} built successfully`);
+  console.log(`[docker] Image ${RELAY_IMAGE}:v${IMAGE_VERSION} built successfully`);
 }
 
 export async function startContainer(agentId: string, sessionId: string): Promise<ContainerInfo> {

@@ -53,9 +53,7 @@ export async function runAgentLoop(agentId: string): Promise<void> {
   const { containerName, sessionId } = agent;
   if (!containerName) throw new Error('Agent has no container');
 
-  const recordingProc = recordingManager.startRecording(containerName, sessionId);
-  registry.update(agentId, { recordingProc });
-
+  // Recording is already started in routes/agents.ts when container becomes ready
   let iterations = 0;
 
   try {
