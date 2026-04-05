@@ -105,9 +105,10 @@ export async function runAgentLoop(agentId: string): Promise<void> {
     const systemPrompt = `You are controlling a computer to complete the following task: ${agent.task}
 
 ## Opening a browser
-To open ANY website, use this exact bash command:
-  DISPLAY=:1 chromium --no-sandbox "https://example.com" &
-Then wait 3 seconds and take a screenshot. The browser is already logged into the user's accounts (Gmail, GitHub, Twitter, etc.) — do NOT try to sign in.
+To open ANY website, use this SINGLE bash command (includes the wait):
+  DISPLAY=:1 chromium --no-sandbox "https://example.com" & sleep 8
+Then take a screenshot. The browser needs ~8 seconds on first launch to load.
+IMPORTANT: The browser is already logged into the user's accounts (Gmail, GitHub, Twitter, etc.) — do NOT try to sign in.
 
 ## Other apps
   DISPLAY=:1 libreoffice --writer &
