@@ -123,11 +123,8 @@ export async function stopContainer(containerName: string, noVNCPort: number | n
 }
 
 export async function screenshot(containerName: string): Promise<string> {
-  const cmd = `
-    DISPLAY=:1 scrot /tmp/relay_ss.png -z 2>/dev/null || \
-    DISPLAY=:1 import -window root /tmp/relay_ss.png 2>/dev/null; \
-    base64 /tmp/relay_ss.png
-  `;
+  // Use scrot -p (pointer/composited mode) matching Anthropic's reference implementation
+  const cmd = `DISPLAY=:1 scrot -p /tmp/relay_ss.png && base64 /tmp/relay_ss.png`;
   const b64 = await execInContainer(containerName, cmd);
   return b64.replace(/\s/g, '');
 }

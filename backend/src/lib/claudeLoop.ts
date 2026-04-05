@@ -64,7 +64,7 @@ export async function runAgentLoop(agentId: string): Promise<void> {
 
 After each step, take a screenshot and carefully evaluate if you have achieved the right outcome. Explicitly show your thinking: "I have evaluated step X..." If not correct, try again. Only when you confirm a step was executed correctly should you move on to the next one.
 
-When you produce output files the user should receive (documents, images, spreadsheets, etc.), write their absolute paths to /tmp/relay_outputs.txt inside the container, one path per line. Example:
+When you produce output files the user should receive (documents, images, spreadsheets, etc.), write their absolute paths to /tmp/relay_outputs.txt inside the container, one path per line:
   echo "/home/computeruse/report.pdf" >> /tmp/relay_outputs.txt
 
 If you need clarification or reach a decision point requiring user input, say "Waiting for input:" followed by your question and stop.`;

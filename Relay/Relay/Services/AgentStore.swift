@@ -186,7 +186,12 @@ final class AgentStore {
             displayText = text
         }
 
-        agent.chatMessages.append(ChatMessage(role: chatRole, text: displayText))
+        let msg = ChatMessage(role: chatRole, text: displayText, agentName: role != "user" ? agent.agentName : nil)
+        agent.chatMessages.append(msg)
+        // Mirror to main chat so user sees agent progress in the right panel
+        if role != "user" {
+            mainChatMessages.append(msg)
+        }
     }
 
     func upsertAgentFromJSON(_ json: [String: Any]) {

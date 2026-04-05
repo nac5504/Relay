@@ -6,6 +6,7 @@ final class WebSocketManager: @unchecked Sendable {
     private init() {}
 
     private var task: URLSessionWebSocketTask?
+    private var receiveTask: Task<Void, Never>?
     private var reconnectDelay: TimeInterval = 1
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -15,42 +16,43 @@ final class WebSocketManager: @unchecked Sendable {
     var isConnected = false
 
     func connect() {
-        // Cancel existing task
+        // Cancel existing
+        receiveTask?.cancel()
         task?.cancel(with: .normalClosure, reason: nil)
 
         let url = URL(string: "ws://localhost:3001")!
         let wsTask = session.webSocketTask(with: url)
         self.task = wsTask
         wsTask.resume()
-        reconnectDelay = 1
         print("[WS] Connecting to \(url)")
-        receive(wsTask)
+
+        // Start receive loop in a Task
+        receiveTask = Task { [weak self] in
+            await self?.receiveLoop(wsTask)
+        }
+    }
+
+    private func receiveLoop(_ wsTask: URLSessionWebSocketTask) async {
+        while !Task.isCancelled {
+            do {
+                let message = try await wsTask.receive()
+                if case .string(let text) = message {
+                    handleOnMain(text)
+                }
+            } catch {
+                print("[WS] Receive error: \(error.localizedDescription)")
+                await MainActor.run { self.isConnected = false }
+                scheduleReconnect()
+                return
+            }
+        }
     }
 
     func disconnect() {
+        receiveTask?.cancel()
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
-        DispatchQueue.main.async { self.isConnected = false }
-    }
-
-    private func receive(_ wsTask: URLSessionWebSocketTask) {
-        wsTask.receive { [weak self] result in
-            guard let self, self.task === wsTask else { return }
-
-            switch result {
-            case .failure(let error):
-                print("[WS] Receive error: \(error.localizedDescription)")
-                DispatchQueue.main.async { self.isConnected = false }
-                self.scheduleReconnect()
-
-            case .success(let message):
-                DispatchQueue.main.async { self.isConnected = true }
-                if case .string(let text) = message {
-                    self.handle(text)
-                }
-                self.receive(wsTask)
-            }
-        }
+        isConnected = false
     }
 
     private func scheduleReconnect() {
@@ -62,7 +64,7 @@ final class WebSocketManager: @unchecked Sendable {
         }
     }
 
-    private func handle(_ text: String) {
+    private func handleOnMain(_ text: String) {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else { return }
@@ -74,6 +76,7 @@ final class WebSocketManager: @unchecked Sendable {
             case "connected":
                 print("[WS] Connected to backend")
                 self.isConnected = true
+                self.reconnectDelay = 1
 
             case "agent_update":
                 guard let agentId = json["agentId"] as? String else { return }
