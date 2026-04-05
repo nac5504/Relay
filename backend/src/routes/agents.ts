@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as registry from '../lib/agentRegistry';
 import * as docker from '../lib/dockerManager';
 import * as claudeLoop from '../lib/claudeLoop';
+import * as bashLoop from '../lib/bashLoop';
 import * as planAgent from '../lib/planAgent';
 import * as messageQueue from '../lib/messageQueue';
 import * as recordingManager from '../lib/recordingManager';
@@ -82,15 +83,17 @@ router.post('/', async (req: Request, res: Response) => {
   setImmediate(async () => {
     // 1. Start plan agent immediately (it streams while container boots)
     console.log(`[agents] Starting plan agent for ${agentId}`);
-    planAgent.runPlanAgent(agentId, async (_finalPlan: string) => {
-      console.log(`[agents] Plan complete for ${agentId} — waiting for container`);
+    planAgent.runPlanAgent(agentId, async (_finalPlan: string, mode: 'bash_only' | 'computer_use') => {
+      console.log(`[agents] Plan complete for ${agentId} (mode: ${mode}) — waiting for container`);
       await waitForContainerReady(agentId);
       const current = registry.get(agentId);
       if (!current || current.status === 'stopped') return;
-      console.log(`[agents] Starting computer use loop for ${agentId}`);
+      console.log(`[agents] Starting ${mode} loop for ${agentId}`);
       registry.update(agentId, { status: 'working' });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: 0 });
-      claudeLoop.runAgentLoop(agentId).catch((err) => {
+
+      const loopFn = mode === 'bash_only' ? bashLoop.runBashLoop : claudeLoop.runAgentLoop;
+      loopFn(agentId).catch((err) => {
         console.error(`[agents] Loop error for ${agentId}:`, err);
       });
     }).catch((err) => {
