@@ -9,6 +9,7 @@ import agentsRouter from './routes/agents';
 import recordingsRouter from './routes/recordings';
 import dockerRouter from './routes/docker';
 import { cleanupStale } from './lib/dockerManager';
+import * as warmPool from './lib/warmPool';
 
 const app = express();
 const server = http.createServer(app);
@@ -39,6 +40,7 @@ app.post('/config', (req, res) => {
   }
   appConfig.setApiKey(apiKey);
   console.log('[config] API key set');
+  warmPool.initWarmPool(); // fire-and-forget: boots warm container in background
   res.json({ ok: true });
 });
 
@@ -51,3 +53,12 @@ server.listen(PORT, () => {
   console.log(`Relay backend listening on http://localhost:${PORT}`);
   cleanupStale().then(() => console.log('[startup] Stale containers cleaned up'));
 });
+
+// Graceful shutdown — drain warm pool
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(sig, async () => {
+    console.log(`[shutdown] Received ${sig}, draining warm pool...`);
+    await warmPool.drainPool();
+    process.exit(0);
+  });
+}

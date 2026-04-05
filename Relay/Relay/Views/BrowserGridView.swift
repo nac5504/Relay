@@ -28,14 +28,34 @@ struct BrowserGridView: View {
                             isMentioned: mentionedAgentId == agent.id,
                             onClose: { onCloseAgent(agent) }
                         )
-                        .overlay(alignment: .topLeading) {
-                            HStack(spacing: 8) {
-                                CachedAvatarView(url: agent.avatarURL, size: 24)
+                        .overlay(alignment: .bottomLeading) {
+                            HStack(spacing: 6) {
+                                CachedAvatarView(url: agent.avatarURL, size: 22)
                                 Text(agent.agentName)
-                                    .font(.system(size: 18, design: .monospaced).weight(.semibold))
-                                    .foregroundStyle(.black.opacity(0.7))
+                                    .font(.system(size: 14, design: .monospaced).weight(.semibold))
+                                    .foregroundStyle(.white)
+
+                                if !agent.currentTaskName.isEmpty && agent.currentTaskName != "Idle" {
+                                    Text("·")
+                                        .font(.system(size: 14, weight: .bold))
+                                        .foregroundStyle(.white.opacity(0.4))
+                                    Text(agent.currentTaskName)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.7))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
                             }
-                            .padding(8)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                LinearGradient(
+                                    colors: [.black.opacity(0.6), .clear],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            )
                             .opacity(isSelected ? 0 : 1)
                             .animation(.easeOut(duration: 0.15), value: selectedAgentId)
                         }

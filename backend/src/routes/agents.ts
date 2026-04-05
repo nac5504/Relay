@@ -8,6 +8,7 @@ import * as planAgent from '../lib/planAgent';
 import * as messageQueue from '../lib/messageQueue';
 import * as recordingManager from '../lib/recordingManager';
 import * as wsHub from '../lib/wsHub';
+import * as warmPool from '../lib/warmPool';
 import { AgentState } from '../lib/types';
 import { getApiKey, hasApiKey } from '../lib/config';
 import * as chromeSync from '../lib/chromeProfileSync';
@@ -52,7 +53,8 @@ router.get('/:id/history', (req: Request, res: Response) => {
 router.post('/', async (req: Request, res: Response) => {
   if (!hasApiKey()) return res.status(400).json({ error: 'API key not set. POST /config first.' });
 
-  const { task, agentName, chromeProfile } = req.body as { task?: string; agentName?: string; chromeProfile?: string };
+  const { task, agentName, chromeProfile: reqProfile } = req.body as { task?: string; agentName?: string; chromeProfile?: string };
+  const chromeProfile = reqProfile ?? 'Profile 1'; // default to usc.edu profile
   if (!task) return res.status(400).json({ error: '"task" is required' });
 
   const agentId = uuidv4();
@@ -82,7 +84,29 @@ router.post('/', async (req: Request, res: Response) => {
   res.status(201).json(summarize(agent));
 
   setImmediate(async () => {
-    // 1. Start plan agent immediately (it streams while container boots)
+    let containerAssigned = false;
+
+    // 1. Try warm pool for instant container assignment
+    const warm = warmPool.acquire();
+    if (warm) {
+      try {
+        const newName = `relay-agent-${agentId.replace(/-/g, '').slice(0, 12)}`;
+        await docker.dockerRun(['rename', warm.containerName, newName]);
+        console.log(`[agents] Using warm container ${warm.containerName} → ${newName} (instant)`);
+
+        registry.update(agentId, { containerName: newName, noVNCPort: warm.noVNCPort, vncPort: warm.vncPort });
+        wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', cost: 0 });
+
+        const recordingProc = recordingManager.startRecording(newName, sessionId);
+        registry.update(agentId, { containerReady: true, status: 'planning', recordingProc });
+        wsHub.broadcast({ type: 'agent_update', agentId, status: 'planning', noVNCPort: warm.noVNCPort, vncPort: warm.vncPort, cost: 0 });
+        containerAssigned = true;
+      } catch (err) {
+        console.warn(`[agents] Warm container assign failed, falling back to cold boot:`, (err as Error).message);
+      }
+    }
+
+    // 2. Start plan agent (works for both warm and cold paths)
     console.log(`[agents] Starting plan agent for ${agentId}`);
     planAgent.runPlanAgent(agentId, async (_finalPlan: string, mode: 'bash_only' | 'computer_use') => {
       console.log(`[agents] Plan complete for ${agentId} (mode: ${mode}) — waiting for container`);
@@ -101,9 +125,10 @@ router.post('/', async (req: Request, res: Response) => {
       console.error(`[agents] Plan agent error for ${agentId}:`, err);
     });
 
-    // 2. Boot container in background
-    try {
-      // Sync Chrome profile if requested
+    // 3. Cold boot fallback if no warm container was available
+    if (!containerAssigned) {
+      try {
+        // Sync Chrome profile if requested
       let chromeProfilePath: string | undefined;
       if (chromeProfile) {
         try {
@@ -114,24 +139,31 @@ router.post('/', async (req: Request, res: Response) => {
         }
       }
 
-      console.log(`[agents] Starting container for ${agentId}`);
-      const { containerName, noVNCPort, vncPort } = await docker.startContainer(agentId, sessionId, chromeProfilePath);
-      console.log(`[agents] Container ${containerName} started — noVNC:${noVNCPort} VNC:${vncPort}`);
-      registry.update(agentId, { containerName, noVNCPort, vncPort });
-      wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', cost: 0 });
+      console.log(`[agents] Starting container for ${agentId} (cold boot)`);
+        const { containerName, noVNCPort, vncPort } = await docker.startContainer(agentId, sessionId, chromeProfilePath);
+        console.log(`[agents] Container ${containerName} started — noVNC:${noVNCPort} VNC:${vncPort}`);
+        registry.update(agentId, { containerName, noVNCPort, vncPort });
+        wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', cost: 0 });
 
-      console.log(`[agents] Waiting for container ready on port ${noVNCPort}...`);
-      await docker.waitForReady(noVNCPort);
-      console.log(`[agents] Container ready for ${agentId}`);
+        console.log(`[agents] Waiting for container ready on port ${noVNCPort}...`);
+        await docker.waitForReady(noVNCPort);
+        console.log(`[agents] Container ready for ${agentId}`);
 
-      // Start recording now that container is ready
-      const recordingProc = recordingManager.startRecording(containerName, sessionId);
-      registry.update(agentId, { containerReady: true, status: 'planning', recordingProc });
-      wsHub.broadcast({ type: 'agent_update', agentId, status: 'planning', noVNCPort, vncPort, cost: 0 });
-    } catch (err) {
-      console.error(`[agents] Container start failed for ${agentId}:`, err);
-      registry.update(agentId, { status: 'error', error: (err as Error).message });
-      wsHub.broadcast({ type: 'agent_update', agentId, status: 'error', error: (err as Error).message });
+        // Set desktop wallpaper via pcmanfm (creates a DESKTOP-type window above mutter's background)
+        docker.execInContainer(containerName,
+          'DISPLAY=:1 pcmanfm --desktop --profile default & sleep 2 && DISPLAY=:1 pcmanfm --set-wallpaper /usr/share/wallpaper.jpg --wallpaper-mode=stretch',
+          15_000
+        ).catch((e) => console.warn(`[agents] Wallpaper set failed: ${(e as Error).message}`));
+
+        // Start recording now that container is ready
+        const recordingProc = recordingManager.startRecording(containerName, sessionId);
+        registry.update(agentId, { containerReady: true, status: 'planning', recordingProc });
+        wsHub.broadcast({ type: 'agent_update', agentId, status: 'planning', noVNCPort, vncPort, cost: 0 });
+      } catch (err) {
+        console.error(`[agents] Container start failed for ${agentId}:`, err);
+        registry.update(agentId, { status: 'error', error: (err as Error).message });
+        wsHub.broadcast({ type: 'agent_update', agentId, status: 'error', error: (err as Error).message });
+      }
     }
   });
 });
