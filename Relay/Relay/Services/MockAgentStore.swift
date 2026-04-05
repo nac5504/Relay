@@ -72,8 +72,8 @@ class MockAgentStore: AgentStoreProtocol {
         mentionedAgentId = agents.first(where: { $0.agentName.lowercased() == name.lowercased() })?.id
     }
 
-    private let namePool = ["Atlas", "Nova", "Sage", "Echo", "Pixel", "Bolt", "Onyx", "Flux", "Haze", "Iris",
-                              "Crux", "Vega", "Neon", "Apex", "Zinc", "Lumen", "Drift", "Prism", "Orbit", "Pulse"]
+    private let namePool = ["Atlas", "Sage", "Echo", "Pixel", "Bolt", "Onyx", "Flux", "Haze", "Iris",
+                              "Crux", "Vega", "Neon", "Apex", "Zinc", "Lumen", "Drift", "Prism", "Orbit", "Pulse", "Nova"]
 
     /// Return a name not already used by a living agent. If the pool is exhausted, append a number.
     private func uniqueName(preferred: String? = nil) -> String {

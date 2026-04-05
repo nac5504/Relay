@@ -189,6 +189,14 @@ export async function runPlanAgent(
       timestamp: new Date().toISOString(),
     });
   }
+
+  // Plan agent exited without calling begin_implementation — clean up status
+  const finalAgent = registry.get(agentId);
+  if (finalAgent && (finalAgent.status === 'starting' || finalAgent.status === 'planning')) {
+    console.log(`[planAgent] Exited without implementation for ${agentId} — marking as stopped`);
+    registry.update(agentId, { status: 'stopped' });
+    wsHub.broadcast({ type: 'agent_update', agentId, status: 'stopped' });
+  }
 }
 
 async function pollForMessage(agentId: string, timeoutMs: number): Promise<string | null> {

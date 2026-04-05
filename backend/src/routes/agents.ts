@@ -160,6 +160,11 @@ router.post('/:id/message', (req: Request, res: Response) => {
 
   console.log(`[agents] Message for ${req.params.id} (status: ${agent.status}): "${text.slice(0, 60)}"`);
 
+  if (agent.status === 'completed' || agent.status === 'stopped' || agent.status === 'error') {
+    console.log(`[agents] Agent is ${agent.status} — message ignored`);
+    return res.status(400).json({ error: `Agent is ${agent.status}` });
+  }
+
   if (agent.status === 'starting' || agent.status === 'planning') {
     // Route to plan agent
     console.log(`[agents] Routing to plan agent`);

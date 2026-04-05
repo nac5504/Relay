@@ -18,7 +18,7 @@ import { ComputerToolInput, AnthropicMessage } from './types';
 const MODEL = 'claude-sonnet-4-6';
 const MAX_TOKENS = 4096;
 const LOOP_DELAY_MS = 2000;
-const MAX_ITERATIONS = 50;
+const MAX_ITERATIONS = 200;
 
 // Per docs: computer-use-2025-11-24 for Opus 4.6, Sonnet 4.6, Opus 4.5
 const BETA_HEADER = 'computer-use-2025-11-24' as const;

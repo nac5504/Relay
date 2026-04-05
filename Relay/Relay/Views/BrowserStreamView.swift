@@ -11,21 +11,13 @@ struct BrowserStreamView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
 
-        // Hide noVNC header and make canvas fill
+        // Hide noVNC header bar
         let hideHeaderScript = WKUserScript(
             source: Self.hideHeaderJS,
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true
         )
         config.userContentController.addUserScript(hideHeaderScript)
-
-        // Auto-reconnect script: monitors noVNC connection state and retries on failure
-        let reconnectScript = WKUserScript(
-            source: Self.autoReconnectJS,
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: true
-        )
-        config.userContentController.addUserScript(reconnectScript)
 
         // FPS measurement script
         let fpsScript = WKUserScript(
@@ -36,12 +28,8 @@ struct BrowserStreamView: NSViewRepresentable {
         config.userContentController.addUserScript(fpsScript)
         config.userContentController.add(context.coordinator, name: "fpsReport")
 
-        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-        config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
-
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
-        webView.setValue(false, forKey: "drawsBackground")
         if let url = agent.noVNCURL {
             webView.load(URLRequest(url: url))
         }
@@ -72,10 +60,14 @@ struct BrowserStreamView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            guard let dict = message.body as? [String: Any],
-                  let fps = dict["fps"] as? Double else { return }
-            Task { @MainActor in
-                self.onFPSUpdate?(fps)
+            guard let dict = message.body as? [String: Any] else { return }
+            if let debug = dict["debug"] as? String {
+                print("[noVNC] \(debug)")
+            }
+            if let fps = dict["fps"] as? Double, fps > 0 {
+                Task { @MainActor in
+                    self.onFPSUpdate?(fps)
+                }
             }
         }
 
@@ -92,57 +84,55 @@ struct BrowserStreamView: NSViewRepresentable {
         }
     }
 
-    /// Hides noVNC chrome and makes canvas fill the view
+    /// Hides noVNC header bar only — does NOT touch canvas sizing
     private static let hideHeaderJS = """
     (function() {
         var style = document.createElement('style');
         style.textContent = `
-            #top_bar { display: none !important; }
+            #top_bar { display: none !important; height: 0 !important; }
             #status { display: none !important; }
-            #noVNC_control_bar { display: none !important; }
-            #noVNC_status_bar { display: none !important; }
-            body { margin: 0 !important; overflow: hidden !important; background: #1a1a1a !important; }
-            #noVNC_container { width: 100vw !important; height: 100vh !important; }
-            #noVNC_screen { width: 100vw !important; height: 100vh !important; }
-            #screen { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; }
-            canvas { width: 100% !important; height: 100% !important; object-fit: contain !important; }
+            body { margin: 0 !important; background: #1a1a1a !important; }
         `;
         document.head.appendChild(style);
     })();
     """
 
-    /// Auto-reconnect for vnc_lite.html — monitors the RFB object and reconnects on failure
+    /// Logs VNC connection state and auto-reconnects
     private static let autoReconnectJS = """
     (function() {
         var retries = 0;
         var maxRetries = 30;
 
+        function log(msg) {
+            try { window.webkit.messageHandlers.fpsReport.postMessage({debug: msg, fps: 0}); } catch(e) {}
+        }
+
         function checkAndReconnect() {
             if (retries >= maxRetries) return;
 
-            // vnc_lite.html stores the RFB instance
             var rfb = window.rfb;
             if (!rfb) {
-                // RFB not created yet — page still loading, try again
                 retries++;
+                log('noVNC: no RFB object yet (attempt ' + retries + ')');
                 setTimeout(checkAndReconnect, 2000);
                 return;
             }
 
-            var state = rfb._rfbConnectionState || rfb.connectionState;
-            if (state === 'disconnected' || state === 'failed') {
+            var state = rfb._rfbConnectionState;
+            log('noVNC state: ' + state);
+
+            if (state === 'disconnected') {
                 retries++;
-                console.log('noVNC reconnect attempt ' + retries);
-                // Reload the page to get a fresh connection
+                log('noVNC: reconnecting (attempt ' + retries + ')');
                 window.location.reload();
-            } else {
-                retries = 0; // reset on success
+            } else if (state === 'connected') {
+                retries = 0;
             }
 
             setTimeout(checkAndReconnect, 3000);
         }
 
-        setTimeout(checkAndReconnect, 3000);
+        setTimeout(checkAndReconnect, 2000);
     })();
     """
 
