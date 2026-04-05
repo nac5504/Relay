@@ -3,33 +3,24 @@ import { getApiKey } from './config';
 import * as registry from './agentRegistry';
 import * as wsHub from './wsHub';
 
-const MODEL = 'claude-sonnet-4-6';
+const MODEL = 'claude-haiku-4-5';
 
-const ENVIRONMENT_CONTEXT = `
-The computer use agent runs inside a Linux Docker container with the following environment:
-- Display: 1024x768 virtual desktop (Xvfb)
-- Browser: Chromium (chromium-browser), Firefox ESR available
-- Office suite: LibreOffice (Writer, Calc, Impress, Draw)
-- Text editors: nano, vim, gedit
-- Shell: bash with standard Unix utilities
-- Python 3 with pip
-- Internet access: yes
-- Output files: the agent can write any file and mark it for retrieval by appending its absolute path to /tmp/relay_outputs.txt (one path per line)
+const PLAN_AGENT_SYSTEM = `You are a planning assistant for an autonomous computer agent running in a Linux Docker container.
 
-The agent controls the computer by taking screenshots and using mouse/keyboard actions. It works best with clear, numbered step-by-step instructions.
-`.trim();
-
-const PLAN_AGENT_SYSTEM = `You are a planning assistant helping a user define a precise task for an autonomous computer use agent.
-
-${ENVIRONMENT_CONTEXT}
+The container has: Firefox ESR, LibreOffice, Python 3, bash, curl, and standard Unix tools. The agent can interact via GUI (screenshots + mouse/keyboard) or via bash/code directly.
 
 Your job:
-1. Understand what the user wants to accomplish
-2. Ask 1-2 clarifying questions only if the task is genuinely ambiguous (file format, specific URL, target application, etc.)
-3. Produce a concrete, numbered step-by-step plan the agent can execute
-4. When the user confirms they want to proceed (says "go", "looks good", "implement", "start", "do it", "yes", or similar), call the begin_implementation tool with the final plan
+1. Understand what the user wants
+2. Ask 1-2 clarifying questions ONLY if genuinely ambiguous
+3. Propose a concise plan
+4. When the user confirms ("go", "yes", "do it", etc.), call begin_implementation with:
+   - finalPlan: the step-by-step task
+   - mode: "bash_only" if the task can be done entirely via command line (file creation, text processing, code execution, API calls via curl) or "computer_use" if it requires GUI interaction (browsing websites, using LibreOffice GUI, clicking through apps)
 
-Keep responses concise. If the task is already clear and specific, skip straight to proposing the plan. Do not overcomplicate — the agent is capable.`;
+IMPORTANT: Prefer "bash_only" mode whenever possible — it's 10x faster and cheaper. Only use "computer_use" when the task genuinely requires seeing/interacting with a GUI (e.g., navigating a website, filling forms, using a visual app).
+
+Examples of bash_only tasks: write a file, run a script, process data, create documents via CLI, make API calls
+Examples of computer_use tasks: browse a website, fill out a form, use LibreOffice GUI, take screenshots of web pages`;
 
 // Per-agent pending message buffer (polling-based so runPlanAgent can stay async)
 const pendingMessages = new Map<string, string>();
@@ -46,7 +37,7 @@ export function cancelPlanAgent(agentId: string): void {
 
 export async function runPlanAgent(
   agentId: string,
-  onBeginImplementation: (finalPlan: string) => Promise<void>,
+  onBeginImplementation: (finalPlan: string, mode: 'bash_only' | 'computer_use') => Promise<void>,
 ): Promise<void> {
   const agent = registry.get(agentId);
   if (!agent) return;
@@ -91,16 +82,21 @@ export async function runPlanAgent(
         tools: [
           {
             name: 'begin_implementation',
-            description: 'Call this when the user confirms they want to proceed. Passes the final plan to the computer use agent.',
+            description: 'Call this when the user confirms they want to proceed.',
             input_schema: {
               type: 'object' as const,
               properties: {
                 finalPlan: {
                   type: 'string',
-                  description: 'The complete, step-by-step task description for the computer use agent.',
+                  description: 'The complete, step-by-step task description.',
+                },
+                mode: {
+                  type: 'string',
+                  enum: ['bash_only', 'computer_use'],
+                  description: 'bash_only for CLI-only tasks (faster/cheaper), computer_use for GUI tasks.',
                 },
               },
-              required: ['finalPlan'],
+              required: ['finalPlan', 'mode'],
             },
           },
         ],
@@ -162,10 +158,12 @@ export async function runPlanAgent(
           content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'Implementation started.' }],
         });
 
-        wsHub.broadcast({ type: 'plan_complete', agentId, timestamp: new Date().toISOString() });
+        const mode = (toolInput.mode === 'bash_only' ? 'bash_only' : 'computer_use') as 'bash_only' | 'computer_use';
+        console.log(`[planAgent] Mode: ${mode}`);
+        wsHub.broadcast({ type: 'plan_complete', agentId, mode, timestamp: new Date().toISOString() });
         registry.update(agentId, { task: toolInput.finalPlan });
 
-        await onBeginImplementation(toolInput.finalPlan);
+        await onBeginImplementation(toolInput.finalPlan, mode);
         break;
       }
     }
