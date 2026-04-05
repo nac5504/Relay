@@ -23,6 +23,13 @@ app.use('/recordings', recordingsRouter);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+// List available Chrome profiles from macOS
+app.get('/chrome-profiles', async (_req, res) => {
+  const { detectProfiles } = await import('./lib/chromeProfileSync');
+  const profiles = await detectProfiles();
+  res.json(profiles);
+});
+
 app.post('/config', (req, res) => {
   const { apiKey } = req.body as { apiKey?: string };
   if (!apiKey || typeof apiKey !== 'string') {

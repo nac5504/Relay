@@ -71,7 +71,7 @@ export interface ContainerInfo {
 }
 
 let imageReady = false;
-const IMAGE_VERSION = '3'; // bump to force rebuild — added relay_tool_runner.py
+const IMAGE_VERSION = '4'; // bump to force rebuild — added chromium via playwright
 
 export async function ensureImage(): Promise<void> {
   if (imageReady) return;
@@ -90,14 +90,14 @@ export async function ensureImage(): Promise<void> {
   console.log(`[docker] Image ${RELAY_IMAGE}:v${IMAGE_VERSION} built successfully`);
 }
 
-export async function startContainer(agentId: string, sessionId: string): Promise<ContainerInfo> {
+export async function startContainer(agentId: string, sessionId: string, chromeProfilePath?: string): Promise<ContainerInfo> {
   await ensureImage();
 
   const ports = allocatePorts();
   const containerName = `relay-agent-${agentId.replace(/-/g, '').slice(0, 12)}`;
   const recordingsPath = path.resolve(RECORDINGS_DIR, sessionId);
 
-  await dockerRun([
+  const args = [
     'run', '-d',
     '--name', containerName,
     '-p', `${ports.noVNC}:6080`,
@@ -107,8 +107,16 @@ export async function startContainer(agentId: string, sessionId: string): Promis
     '-e', 'WIDTH=1024',
     '-e', 'HEIGHT=768',
     '--shm-size=2g',
-    RELAY_IMAGE,
-  ]);
+  ];
+
+  // Mount Chrome profile if synced
+  if (chromeProfilePath) {
+    args.push('-v', `${chromeProfilePath}:/home/computeruse/.config/chromium/Default`);
+    console.log(`[docker] Mounting Chrome profile from ${chromeProfilePath}`);
+  }
+
+  args.push(RELAY_IMAGE);
+  await dockerRun(args);
 
   return { containerName, noVNCPort: ports.noVNC, vncPort: ports.vnc };
 }

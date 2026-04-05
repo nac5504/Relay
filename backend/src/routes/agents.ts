@@ -10,6 +10,7 @@ import * as recordingManager from '../lib/recordingManager';
 import * as wsHub from '../lib/wsHub';
 import { AgentState } from '../lib/types';
 import { getApiKey, hasApiKey } from '../lib/config';
+import * as chromeSync from '../lib/chromeProfileSync';
 
 const router = Router();
 
@@ -51,7 +52,7 @@ router.get('/:id/history', (req: Request, res: Response) => {
 router.post('/', async (req: Request, res: Response) => {
   if (!hasApiKey()) return res.status(400).json({ error: 'API key not set. POST /config first.' });
 
-  const { task, agentName } = req.body as { task?: string; agentName?: string };
+  const { task, agentName, chromeProfile } = req.body as { task?: string; agentName?: string; chromeProfile?: string };
   if (!task) return res.status(400).json({ error: '"task" is required' });
 
   const agentId = uuidv4();
@@ -102,8 +103,19 @@ router.post('/', async (req: Request, res: Response) => {
 
     // 2. Boot container in background
     try {
+      // Sync Chrome profile if requested
+      let chromeProfilePath: string | undefined;
+      if (chromeProfile) {
+        try {
+          console.log(`[agents] Syncing Chrome profile "${chromeProfile}" for ${agentId}`);
+          chromeProfilePath = await chromeSync.syncProfile(chromeProfile, agentId);
+        } catch (err) {
+          console.warn(`[agents] Chrome profile sync failed: ${(err as Error).message}`);
+        }
+      }
+
       console.log(`[agents] Starting container for ${agentId}`);
-      const { containerName, noVNCPort, vncPort } = await docker.startContainer(agentId, sessionId);
+      const { containerName, noVNCPort, vncPort } = await docker.startContainer(agentId, sessionId, chromeProfilePath);
       console.log(`[agents] Container ${containerName} started — noVNC:${noVNCPort} VNC:${vncPort}`);
       registry.update(agentId, { containerName, noVNCPort, vncPort });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'starting', noVNCPort, vncPort, cost: 0 });
