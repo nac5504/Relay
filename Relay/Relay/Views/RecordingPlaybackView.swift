@@ -154,18 +154,23 @@ struct RecordingPlaybackView: View {
     }
 
     private func loadRecording() {
-        let url = APIService.shared.recordingURL(sessionId: agent.sessionId)
-        let avPlayer = AVPlayer(url: url)
-        self.player = avPlayer
+        let remoteURL = APIService.shared.recordingURL(sessionId: agent.sessionId)
+        print("[Playback] Loading recording from \(remoteURL)")
 
-        // Time observer for scrubber
-        timeObserver = avPlayer.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
-            queue: .main
-        ) { time in
-            currentTime = time.seconds
-            if let dur = avPlayer.currentItem?.duration.seconds, dur.isFinite {
-                duration = dur
+        // Download to temp file first — AVPlayer can't stream from localhost in sandboxed apps
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: remoteURL)
+                let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(agent.sessionId).mp4")
+                try data.write(to: tmpURL)
+                print("[Playback] Downloaded \(data.count) bytes → \(tmpURL.path)")
+                await MainActor.run {
+                    let avPlayer = AVPlayer(url: tmpURL)
+                    self.player = avPlayer
+                    setupTimeObserver(avPlayer)
+                }
+            } catch {
+                print("[Playback] Download failed: \(error)")
             }
         }
 
@@ -193,6 +198,18 @@ struct RecordingPlaybackView: View {
         let nextChapter = chapters.filter { $0.status == "active" && $0.timestampSeconds > ch.timestampSeconds }.first
         let end = nextChapter?.timestampSeconds ?? duration
         return currentTime >= ch.timestampSeconds && currentTime < end
+    }
+
+    private func setupTimeObserver(_ avPlayer: AVPlayer) {
+        timeObserver = avPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { time in
+            currentTime = time.seconds
+            if let dur = avPlayer.currentItem?.duration.seconds, dur.isFinite {
+                duration = dur
+            }
+        }
     }
 
     private func cleanup() {
