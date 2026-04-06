@@ -10,6 +10,15 @@ import { getApiKey } from './config';
 const MODEL = 'claude-sonnet-4-6';
 const MAX_ITERATIONS = 50;
 
+function parsePlanSteps(planText: string): string[] {
+  const steps: string[] = [];
+  for (const line of planText.split('\n')) {
+    const match = line.match(/^\s*(\d+)\.\s+(.+)/);
+    if (match) steps.push(match[2].trim());
+  }
+  return steps;
+}
+
 /**
  * Bash-only agent loop — no screenshots, no GUI. Uses bash + text_editor tools only.
  * Much faster and cheaper than the full computer use loop.
@@ -40,6 +49,14 @@ When done, state "Task completed." and stop.`;
   console.log(`[bash:${agentId.slice(0,8)}] Starting bash-only loop`);
   registry.update(agentId, { status: 'working' });
   wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: 0 });
+
+  // Parse plan steps and broadcast checklist
+  const planSteps = parsePlanSteps(agent.task);
+  if (planSteps.length > 0) {
+    wsHub.broadcast({ type: 'task_list', agentId, steps: planSteps });
+    wsHub.broadcast({ type: 'task_update', agentId, stepIndex: 0, status: 'active' });
+  }
+  let stepsCompleted = 0;
 
   try {
     while (iterations < MAX_ITERATIONS) {
@@ -145,7 +162,20 @@ When done, state "Task completed." and stop.`;
 
       messages.push({ role: 'user', content: toolResults });
 
-      const newCost = (registry.get(agentId)?.cost ?? 0) + 0.003; // much cheaper per iteration
+      // Progress plan steps — each successful tool call advances one step
+      if (planSteps.length > 0 && toolResults.length > 0 && stepsCompleted < planSteps.length) {
+        // Check if any tool had an error
+        const hasError = toolResults.some(r => typeof r.content === 'string' && r.content.startsWith('Error:'));
+        if (!hasError) {
+          wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepsCompleted, status: 'completed' });
+          stepsCompleted++;
+          if (stepsCompleted < planSteps.length) {
+            wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepsCompleted, status: 'active' });
+          }
+        }
+      }
+
+      const newCost = (registry.get(agentId)?.cost ?? 0) + 0.003;
       registry.update(agentId, { cost: newCost });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: newCost });
     }
