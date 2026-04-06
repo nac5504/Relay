@@ -66,5 +66,6 @@ fastlane/test_output
 backend/node_modules/
 backend/dist/
 backend/recordings
+backend/outputs/
 
 docs/

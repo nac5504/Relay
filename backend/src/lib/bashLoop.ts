@@ -130,13 +130,17 @@ When done, state "Task completed." and stop.`;
 
         if (block.name === 'bash') {
           const input = block.input as { command?: string; restart?: boolean };
-          console.log(`[bash:${agentId.slice(0,8)}] 💻 $ ${(input.command ?? 'restart').slice(0, 120)}`);
+          console.log(`[bash:${agentId.slice(0,8)}] 💻 ${input.restart ? 'bash restart' : `$ ${(input.command ?? '').slice(0, 120)}`}`);
 
           let output: string;
-          try {
-            output = await docker.executeBash(containerName, input);
-          } catch (err) {
-            output = `Error: ${(err as Error).message}`;
+          if (input.restart || !input.command) {
+            output = 'Bash session restarted.';
+          } else {
+            try {
+              output = await docker.executeBash(containerName, input);
+            } catch (err) {
+              output = `Error: ${(err as Error).message}`;
+            }
           }
           if (output.trim()) console.log(`[bash:${agentId.slice(0,8)}]    → ${output.trim().slice(0, 200)}`);
 

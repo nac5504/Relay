@@ -75,7 +75,7 @@ export interface ContainerInfo {
 }
 
 let imageReady = false;
-const IMAGE_VERSION = '7'; // bump to force rebuild — wallpaper via pcmanfm
+const IMAGE_VERSION = '8'; // bump — fix coordinate list/tuple bug in relay_tool_runner
 
 export async function ensureImage(): Promise<void> {
   if (imageReady) return;

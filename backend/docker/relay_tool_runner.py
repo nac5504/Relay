@@ -35,11 +35,8 @@ async def run_tool(tool_name: str, tool_input: dict) -> dict:
 
     elif tool_name == "computer":
         tool = ComputerTool()
-        # Map coordinate from list to tuple
-        if "coordinate" in tool_input and isinstance(tool_input["coordinate"], list):
-            tool_input["coordinate"] = tuple(tool_input["coordinate"])
-        if "start_coordinate" in tool_input and isinstance(tool_input["start_coordinate"], list):
-            tool_input["start_coordinate"] = tuple(tool_input["start_coordinate"])
+        # Keep coordinates as lists — Anthropic's validate_and_get_coordinates checks isinstance(coord, list)
+        # (despite the type hint saying tuple)
         result = await tool(**tool_input)
         resp = {"type": "result"}
         if result.base64_image:
