@@ -6,6 +6,7 @@ import * as docker from './dockerManager';
 import * as outputManager from './outputManager';
 import * as recordingManager from './recordingManager';
 import { getApiKey } from './config';
+import * as messageQueue from './messageQueue';
 
 const MODEL = 'claude-sonnet-4-6';
 const MAX_ITERATIONS = 50;
@@ -65,6 +66,14 @@ When done, state "Task completed." and stop.`;
 
       const currentAgent = registry.get(agentId);
       if (!currentAgent || currentAgent.status === 'stopped') break;
+
+      // Check for user interrupt messages
+      const pendingMsg = messageQueue.consumePending(agentId);
+      if (pendingMsg) {
+        messages.push({ role: 'user', content: pendingMsg });
+        wsHub.broadcast({ type: 'chat_message', agentId, role: 'user', text: pendingMsg, timestamp: new Date().toISOString() });
+        console.log(`[bash:${agentId.slice(0,8)}] 💬 User message: "${pendingMsg.slice(0, 80)}"`);
+      }
 
       const response = await client.messages.create({
         model: MODEL,

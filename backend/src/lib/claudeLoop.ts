@@ -131,7 +131,11 @@ export async function runAgentLoop(agentId: string): Promise<void> {
 To open ANY website, use this SINGLE bash command (includes the wait):
   DISPLAY=:1 chromium --no-sandbox "https://example.com" & sleep 8
 Then take a screenshot. The browser needs ~8 seconds on first launch to load.
-IMPORTANT: The browser is already logged into the user's accounts (Gmail, GitHub, Twitter, etc.) — do NOT try to sign in.
+
+## Already logged in
+The browser has the user's real Chrome profile with all their cookies and sessions.
+Gmail, GitHub, Twitter, YouTube, and all other sites the user uses are ALREADY LOGGED IN.
+Do NOT try to sign in, enter credentials, or authenticate — just navigate directly.
 
 ## Other apps
   DISPLAY=:1 libreoffice --writer &
@@ -141,11 +145,18 @@ IMPORTANT: The browser is already logged into the user's accounts (Gmail, GitHub
 ## Workflow
 After each step, take a screenshot and evaluate the result. Be concise. If correct, move on. If not, try once more.
 
+## User messages
+The user may send you messages while you're working. When you see a user message, read it carefully:
+- If it changes the task, acknowledge and adjust your approach
+- If it's feedback on your current action, incorporate it immediately
+- If it's a new instruction, follow it
+Always briefly acknowledge the user's message before continuing.
+
 ## Output files
 When done, write file paths to /tmp/relay_outputs.txt:
   echo "/home/computeruse/report.pdf" >> /tmp/relay_outputs.txt
 
-## User input
+## Clarification
 If you need clarification, say "Waiting for input:" followed by your question and stop.`;
 
     const messages: AnthropicMessage[] = [{
