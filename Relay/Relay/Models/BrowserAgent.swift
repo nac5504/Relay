@@ -27,6 +27,7 @@ class BrowserAgent: Identifiable {
     var startedAt: Date?
     var planComplete: Bool = false
     var outputFiles: [String] = []
+    var outputDir: String? = nil  // Absolute local path to the agent's output directory
     var planSteps: [PlanStep] = []
     var planRevisionCount: Int = 0
     var planVersion: Int = 0
