@@ -10,7 +10,9 @@ struct BrowserTileView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if agent.noVNCPort > 0, agent.noVNCURL != nil {
+            if agent.relayStatus == .completed || agent.relayStatus == .stopped {
+                RecordingPlaybackView(agent: agent)
+            } else if agent.noVNCPort > 0, agent.noVNCURL != nil {
                 BrowserStreamView(
                     agent: agent,
                     onFPSUpdate: { fps in
