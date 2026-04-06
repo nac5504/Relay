@@ -109,13 +109,23 @@ export function logAction(sessionId: string, event: ActionEvent): void {
   timelines.get(sessionId)!.push(event);
 }
 
+// Step events stored separately for chapter markers
+const stepEvents = new Map<string, Array<{ stepIndex: number; status: string; timestampMs: number; title: string }>>();
+
+export function logStepEvent(sessionId: string, event: { stepIndex: number; status: string; timestampMs: number; title: string }): void {
+  if (!stepEvents.has(sessionId)) stepEvents.set(sessionId, []);
+  stepEvents.get(sessionId)!.push(event);
+}
+
 export function saveTimeline(sessionId: string): void {
   const sessionDir = path.join(RECORDINGS_DIR, sessionId);
   fs.mkdirSync(sessionDir, { recursive: true });
   const timelinePath = path.join(sessionDir, 'timeline.json');
   const events = timelines.get(sessionId) ?? [];
-  fs.writeFileSync(timelinePath, JSON.stringify(events, null, 2));
-  console.log(`Timeline saved: ${timelinePath} (${events.length} events)`);
+  const steps = stepEvents.get(sessionId) ?? [];
+  const data = { actions: events, steps };
+  fs.writeFileSync(timelinePath, JSON.stringify(data, null, 2));
+  console.log(`Timeline saved: ${timelinePath} (${events.length} actions, ${steps.length} step events)`);
 }
 
 export function recordingPath(sessionId: string): string {

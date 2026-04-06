@@ -23,33 +23,18 @@ struct MainChatView: View {
                             // Skip output messages merged into preceding bash card
                             if msg.role == .output && i > 0 && store.filteredMainChatMessages[i - 1].role == .action && store.filteredMainChatMessages[i - 1].actionKind == .bash {
                                 EmptyView()
-                            } else if msg.role == .assistant && msg.text.contains("<plan/>") {
-                                // Assistant message with embedded plan
+                            } else if msg.role == .plan {
                                 let planAgent = agentForPlanMessage(msg)
-                                let parts = msg.text.components(separatedBy: "<plan/>")
-                                let snapshot = planAgent?.planSnapshots[msg.id]
-                                let isCurrentPlan = msg.id == planAgent?.currentPlanMessageId
-                                VStack(alignment: .leading, spacing: 8) {
-                                    if let before = parts.first, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        MarkdownTextView(text: before.trimmingCharacters(in: .whitespacesAndNewlines))
-                                    }
-                                    if isCurrentPlan {
-                                        PlanChecklist(
-                                            steps: snapshot?.steps ?? planAgent?.planSteps ?? [],
-                                            version: snapshot?.version ?? planAgent?.planVersion ?? 1
-                                        )
-                                    } else {
-                                        PlanRevisedIndicator()
-                                    }
-                                    if parts.count > 1 {
-                                        let after = parts.dropFirst().joined(separator: "").trimmingCharacters(in: .whitespacesAndNewlines)
-                                        if !after.isEmpty {
-                                            MarkdownTextView(text: after)
-                                        }
-                                    }
-                                }
+                                PlanChecklist(
+                                    steps: planAgent?.planSteps ?? [],
+                                    version: planAgent?.planVersion ?? 1
+                                )
                                 .padding(.bottom, 14)
                                 .id(msg.id)
+                            } else if msg.role == .planRevised {
+                                PlanRevisedIndicator()
+                                    .padding(.bottom, 14)
+                                    .id(msg.id)
                             } else {
                                 let isLast = i == store.filteredMainChatMessages.count - 1 && !hasWorkingAgent
                                 let status = actionStatus(at: i, in: store.filteredMainChatMessages)
@@ -309,6 +294,8 @@ private struct MainThinkingRow: View {
                     .font(.system(.caption2, design: .rounded))
                     .foregroundStyle(.white.opacity(0.25))
             }
+
+            Spacer()
         }
     }
 }

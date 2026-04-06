@@ -147,6 +147,12 @@ When done, state "Task completed." and stop.`;
 
       const currentAgent = registry.get(agentId);
       if (!currentAgent || currentAgent.status === 'stopped') break;
+      if (currentAgent.status === 'paused') {
+        // Paused via /stop — poll until resumed or stopped
+        await new Promise<void>((r) => setTimeout(r, 500));
+        iterations--; // don't count paused iterations against the cap
+        continue;
+      }
 
       const response = await client.messages.create({
         model: MODEL,
@@ -186,7 +192,12 @@ When done, state "Task completed." and stop.`;
           const input = block.input as { command?: string; restart?: boolean };
           console.log(`[bash:${agentId.slice(0,8)}] 💻 $ ${(input.command ?? 'restart').slice(0, 120)}`);
 
-          const output = await docker.executeBash(containerName, input);
+          let output: string;
+          try {
+            output = await docker.executeBash(containerName, input);
+          } catch (err) {
+            output = `Error: ${(err as Error).message}`;
+          }
           if (output.trim()) console.log(`[bash:${agentId.slice(0,8)}]    → ${output.trim().slice(0, 200)}`);
 
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'action', text: `$ ${(input.command ?? 'restart').slice(0, 80)}`, timestamp: new Date().toISOString() });
@@ -196,7 +207,12 @@ When done, state "Task completed." and stop.`;
           const input = block.input as Record<string, unknown>;
           console.log(`[bash:${agentId.slice(0,8)}] 📝 ${input.command} ${input.path}`);
 
-          const output = await docker.executeTextEditor(containerName, input);
+          let output: string;
+          try {
+            output = await docker.executeTextEditor(containerName, input);
+          } catch (err) {
+            output = `Error: ${(err as Error).message}`;
+          }
           if (output.trim()) console.log(`[bash:${agentId.slice(0,8)}]    → ${output.trim().slice(0, 200)}`);
 
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'action', text: `${input.command}: ${input.path}`, timestamp: new Date().toISOString() });
@@ -213,7 +229,7 @@ When done, state "Task completed." and stop.`;
 
       messages.push({ role: 'user', content: toolResults });
 
-      const newCost = (registry.get(agentId)?.cost ?? 0) + 0.003; // much cheaper per iteration
+      const newCost = (registry.get(agentId)?.cost ?? 0) + 0.003;
       registry.update(agentId, { cost: newCost });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: newCost });
     }

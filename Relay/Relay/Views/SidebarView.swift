@@ -161,50 +161,34 @@ private struct AgentSidebarRow: View {
             .buttonStyle(.plain)
             .foregroundStyle(.white.opacity(0.7))
 
-            // Plan steps checklist
+            // Task / active step summary
             if !agent.planSteps.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(agent.planSteps) { step in
-                        HStack(spacing: 6) {
-                            switch step.status {
-                            case .active:
-                                ProgressView()
-                                    .controlSize(.mini)
-                                    .scaleEffect(0.7)
-                                    .frame(width: 12, height: 12)
-                            case .completed:
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.green)
-                                    .frame(width: 12, height: 12)
-                            case .failed:
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.red)
-                                    .frame(width: 12, height: 12)
-                            case .pending:
-                                Circle()
-                                    .strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
-                                    .frame(width: 10, height: 10)
-                                    .frame(width: 12, height: 12)
-                            }
+                VStack(alignment: .leading, spacing: 3) {
+                    // Plan title (the overall task)
+                    if !agent.task.isEmpty {
+                        Text(agent.task)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .lineLimit(1)
+                    }
 
-                            Text(step.shortDescription)
+                    // Current active step with spinner
+                    if let active = agent.planSteps.first(where: { $0.status == .active }) {
+                        HStack(spacing: 5) {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.7)
+                                .frame(width: 10, height: 10)
+                            Text(active.shortDescription)
                                 .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(
-                                    step.status == .active ? .white.opacity(0.8) :
-                                    step.status == .completed ? .white.opacity(0.4) :
-                                    .white.opacity(0.3)
-                                )
+                                .foregroundStyle(.white.opacity(0.6))
                                 .lineLimit(1)
                         }
                     }
                 }
                 .padding(.leading, 42)
                 .padding(.trailing, 10)
-                .padding(.top, 2)
             } else if !agent.task.isEmpty {
-                // Fallback: show task description if no plan steps yet
                 Text(agent.task)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.3))

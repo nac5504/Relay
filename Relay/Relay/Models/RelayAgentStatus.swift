@@ -6,6 +6,7 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
     case planning   // container ready, plan agent conversing
     case working
     case waiting
+    case paused     // plan execution paused via /stop — resumable
     case completed
     case error
     case stopped
@@ -17,6 +18,7 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
         case .planning: return "Planning"
         case .working: return "Working"
         case .waiting: return "Waiting for Input"
+        case .paused: return "Paused"
         case .completed: return "Completed"
         case .error: return "Error"
         case .stopped: return "Stopped"
@@ -28,6 +30,7 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
         case .working: return .green
         case .planning: return .yellow
         case .waiting: return .yellow
+        case .paused: return .orange
         case .starting: return .blue
         case .completed: return .blue
         case .error: return .red
@@ -41,6 +44,7 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
         case .working: return "circle.fill"
         case .planning: return "text.bubble.fill"
         case .waiting: return "questionmark.circle.fill"
+        case .paused: return "pause.circle.fill"
         case .completed: return "checkmark.circle.fill"
         case .error: return "xmark.circle.fill"
         case .starting: return "arrow.clockwise.circle.fill"
@@ -56,6 +60,7 @@ enum RelayAgentStatus: String, Codable, CaseIterable {
         case .planning:   return "Planning"
         case .working:    return "Acting"
         case .waiting:    return "Waiting"
+        case .paused:     return "Paused"
         case .completed:  return "Done"
         case .error:      return "Error"
         case .stopped:    return "Stopped"

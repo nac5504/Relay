@@ -83,6 +83,16 @@ router.post('/', async (req: Request, res: Response) => {
   wsHub.broadcast({ type: 'agent_added', agent: summarize(agent) });
   res.status(201).json(summarize(agent));
 
+  // Generate a short title in the background (non-blocking)
+  if (task) {
+    generateTaskTitle(task).then((title) => {
+      if (title) {
+        wsHub.broadcast({ type: 'agent_title', agentId, title });
+        console.log(`[agents] Title for ${agentId}: "${title}"`);
+      }
+    }).catch(() => {});
+  }
+
   setImmediate(async () => {
     let containerAssigned = false;
 
@@ -179,6 +189,36 @@ async function waitForContainerReady(agentId: string, timeoutMs = 120_000): Prom
   console.warn(`[agents] Container for ${agentId} not ready after ${timeoutMs}ms — proceeding anyway`);
 }
 
+// POST /agents/:id/pause — pause plan execution (loop stops iterating but container stays alive)
+router.post('/:id/pause', (req: Request, res: Response) => {
+  const agent = registry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Not found' });
+
+  if (agent.status !== 'working' && agent.status !== 'waiting') {
+    return res.status(400).json({ error: `Cannot pause agent in status "${agent.status}"` });
+  }
+
+  console.log(`[agents] Pausing ${req.params.id} (was: ${agent.status})`);
+  registry.update(req.params.id, { status: 'paused' });
+  wsHub.broadcast({ type: 'agent_update', agentId: req.params.id, status: 'paused', cost: agent.cost });
+  res.status(204).send();
+});
+
+// POST /agents/:id/resume — resume a paused agent
+router.post('/:id/resume', (req: Request, res: Response) => {
+  const agent = registry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Not found' });
+
+  if (agent.status !== 'paused') {
+    return res.status(400).json({ error: `Agent is not paused (status: ${agent.status})` });
+  }
+
+  console.log(`[agents] Resuming ${req.params.id}`);
+  registry.update(req.params.id, { status: 'working' });
+  wsHub.broadcast({ type: 'agent_update', agentId: req.params.id, status: 'working', cost: agent.cost });
+  res.status(204).send();
+});
+
 // DELETE /agents/:id
 router.delete('/:id', async (req: Request, res: Response) => {
   const agent = registry.get(req.params.id);
@@ -219,7 +259,7 @@ router.post('/:id/message', (req: Request, res: Response) => {
   } else {
     // Route to computer use agent
     messageQueue.setPending(req.params.id, text);
-    if (agent.status === 'waiting') {
+    if (agent.status === 'waiting' || agent.status === 'paused') {
       registry.update(req.params.id, { status: 'working', waitingForInput: false });
       wsHub.broadcast({ type: 'agent_update', agentId: req.params.id, status: 'working', cost: agent.cost });
     }
@@ -233,6 +273,24 @@ const NAME_POOL = ['Atlas', 'Nova', 'Sage', 'Echo', 'Pixel', 'Bolt', 'Onyx', 'Fl
 let nameIdx = 0;
 function generateName(): string {
   return NAME_POOL[nameIdx++ % NAME_POOL.length];
+}
+
+async function generateTaskTitle(task: string): Promise<string | null> {
+  try {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const client = new Anthropic({ apiKey: getApiKey() });
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 15,
+      messages: [{ role: 'user', content: `Task: "${task}"\n\nWrite a 3-5 word title for this task. ONLY the title, no explanation.` }],
+      system: 'You output ONLY a short title (3-5 words, no quotes, no markdown, no punctuation). Examples: Open Gmail inbox, Research competitor pricing, Draft Ramp blog post',
+    });
+    const text = response.content[0]?.type === 'text' ? response.content[0].text.trim() : null;
+    return text?.replace(/^["']|["']$/g, '') ?? null; // strip quotes if any
+  } catch (err) {
+    console.warn(`[agents] Title generation failed: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 export default router;

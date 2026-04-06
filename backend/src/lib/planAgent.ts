@@ -44,7 +44,11 @@ ${ENVIRONMENT_CONTEXT}
 
 Your job:
 1. ALWAYS start by asking 2-4 clarifying questions to understand the user's intent, preferences, and constraints. Do NOT propose a plan on your first response. Just ask questions as plain text.
-2. After the user answers your questions, call update_plan with a structured plan. Each step should have a concise one-sentence shortDescription (shown in the UI) and detailed instructions for the execution agent.
+2. After the user answers your questions, call update_plan with a structured plan. Break the task into granular, atomic steps — each step should be a single concrete action, NOT a broad summary of the whole task. Aim for 4-8 steps even for simple tasks.
+   - shortDescription: a brief, scannable one-line summary (5-10 words) shown in the user-facing UI checklist. Keep it high-level and human-readable — this is what the user sees at a glance.
+   - detailedInstructions: the full context, specifics, commands, file paths, expected outputs, and edge cases the execution agent needs to actually do the work. This can be multiple sentences or paragraphs. The user does NOT see this directly.
+   - BAD (one lumped step): shortDescription: "Create a professional email about Google Stitch in markdown format with business-focused content."
+   - GOOD (granular steps with brief titles): Step 1 shortDescription: "Research Google Stitch features", Step 2: "Draft subject line and intro", Step 3: "Write body covering benefits", Step 4: "Add recommendation section", Step 5: "Format as markdown", Step 6: "Save to output directory" — and each of those has rich detailedInstructions underneath.
 3. After calling update_plan, briefly summarize what the plan does and ask the user if they'd like to proceed or make changes.
 4. If the user gives feedback, revise the plan by calling update_plan again.
 5. When the user confirms ("go", "yes", "do it", "looks good", "proceed", etc.), call begin_implementation.
@@ -269,7 +273,7 @@ export async function runPlanAgent(
         toolResults.push({
           type: 'tool_result',
           tool_use_id: tool.id,
-          content: 'Plan published. Now respond with a brief intro sentence, then write <plan/> on its own line where the plan card should appear, then ask if they want to proceed or make changes. You MUST include the exact text <plan/> on its own line — the UI will render the plan component there.',
+          content: 'Plan published and displayed to the user. Ask if they want to proceed or make changes. Do not include any XML tags like <plan/> in your response.',
         });
 
       } else if (tool.name === 'begin_implementation') {

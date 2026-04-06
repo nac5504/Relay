@@ -15,6 +15,7 @@ class BrowserAgent: Identifiable {
     // Relay agent management fields
     var agentName: String = ""
     var task: String = ""
+    var taskTitle: String = ""  // AI-generated 3-5 word summary
     var tasks: [AgentTask] = []
     var relayStatus: RelayAgentStatus = .notStarted
     var chatMessages: [ChatMessage] = []
@@ -29,12 +30,6 @@ class BrowserAgent: Identifiable {
     var planSteps: [PlanStep] = []
     var planRevisionCount: Int = 0
     var planVersion: Int = 0
-    /// Map from assistant message ID → (version, steps) snapshot for plans embedded via <plan/>
-    var planSnapshots: [UUID: (version: Int, steps: [PlanStep])] = [:]
-    /// The assistant message ID containing the current (latest) <plan/> marker
-    var currentPlanMessageId: UUID? = nil
-    /// Pending plan data waiting to be associated with the next assistant message containing <plan/>
-    var pendingPlan: (version: Int, steps: [PlanStep])? = nil
 
     // Cursor overlay state — updated from WS "action" events
     var cursorPosition: CGPoint? = nil      // normalized 0…1
@@ -63,7 +58,8 @@ class BrowserAgent: Identifiable {
 
     /// Short description of what the agent is doing right now
     var currentTaskName: String {
-        currentTask?.name ?? (task.isEmpty ? (tasks.last?.name ?? "Idle") : task)
+        if !taskTitle.isEmpty { return taskTitle }
+        return currentTask?.name ?? (task.isEmpty ? (tasks.last?.name ?? "Idle") : task)
     }
 
     var noVNCURL: URL? {

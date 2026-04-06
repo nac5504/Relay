@@ -146,13 +146,6 @@ final class WebSocketManager: @unchecked Sendable {
                     if let idx = agent.planSteps.firstIndex(where: { $0.id == stepNumber }) {
                         agent.planSteps[idx].status = newStatus
                     }
-                    // Also update the snapshot so inline checklist reflects progress
-                    if let planMsgId = agent.currentPlanMessageId,
-                       var snapshot = agent.planSnapshots[planMsgId],
-                       let idx = snapshot.steps.firstIndex(where: { $0.id == stepNumber }) {
-                        snapshot.steps[idx].status = newStatus
-                        agent.planSnapshots[planMsgId] = snapshot
-                    }
                 }
 
             case "chat_message":
@@ -177,6 +170,11 @@ final class WebSocketManager: @unchecked Sendable {
                     }
                 }
                 // Chat text is handled via "chat_message" with role:"action"
+
+            case "agent_title":
+                guard let agentId = json["agentId"] as? String,
+                      let title = json["title"] as? String else { return }
+                store.updateAgent(id: agentId) { $0.taskTitle = title }
 
             case "agent_added":
                 if let agentData = json["agent"] as? [String: Any] {

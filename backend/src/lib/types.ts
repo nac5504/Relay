@@ -5,6 +5,7 @@ export type AgentStatus =
   | 'planning'   // container ready, plan agent still talking
   | 'working'    // computer use loop running
   | 'waiting'    // Claude asked for user input
+  | 'paused'     // plan execution paused by user via /stop — resumable
   | 'completed'
   | 'error'
   | 'stopped';

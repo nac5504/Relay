@@ -90,6 +90,14 @@ final class APIService: Sendable {
         _ = try await request("/agents/\(id.lowercased())", method: "DELETE")
     }
 
+    func pauseAgent(id: String) async throws {
+        _ = try await request("/agents/\(id.lowercased())/pause", method: "POST")
+    }
+
+    func resumeAgent(id: String) async throws {
+        _ = try await request("/agents/\(id.lowercased())/resume", method: "POST")
+    }
+
     func sendMessage(agentId: String, text: String) async throws {
         struct Body: Encodable { let text: String }
         _ = try await request("/agents/\(agentId.lowercased())/message", method: "POST", body: Body(text: text))
@@ -114,6 +122,11 @@ final class APIService: Sendable {
         struct Resp: Decodable { let files: [String] }
         let resp: Resp = try await get("/recordings/\(agentId.lowercased())/outputs")
         return resp.files
+    }
+
+    func fetchTimeline(sessionId: String) async throws -> [String: Any] {
+        let data = try await request("/recordings/\(sessionId.lowercased())/timeline")
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
     func recordingURL(sessionId: String) -> URL {

@@ -94,32 +94,17 @@ struct ChatPanelView: View {
                             // Skip output messages that were merged into a preceding bash card
                             if msg.role == .output && i > 0 && messages[i - 1].role == .action && messages[i - 1].actionKind == .bash {
                                 EmptyView()
-                            } else if msg.role == .assistant && msg.text.contains("<plan/>") {
-                                // Assistant message with embedded plan — split on marker
-                                let parts = msg.text.components(separatedBy: "<plan/>")
-                                let snapshot = agent.planSnapshots[msg.id]
-                                let isCurrentPlan = msg.id == agent.currentPlanMessageId
-                                VStack(alignment: .leading, spacing: 8) {
-                                    if let before = parts.first, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        MarkdownTextView(text: before.trimmingCharacters(in: .whitespacesAndNewlines))
-                                    }
-                                    if isCurrentPlan {
-                                        PlanChecklist(
-                                            steps: snapshot?.steps ?? agent.planSteps,
-                                            version: snapshot?.version ?? agent.planVersion
-                                        )
-                                    } else {
-                                        PlanRevisedIndicator()
-                                    }
-                                    if parts.count > 1 {
-                                        let after = parts.dropFirst().joined(separator: "").trimmingCharacters(in: .whitespacesAndNewlines)
-                                        if !after.isEmpty {
-                                            MarkdownTextView(text: after)
-                                        }
-                                    }
-                                }
+                            } else if msg.role == .plan {
+                                PlanChecklist(
+                                    steps: agent.planSteps,
+                                    version: agent.planVersion
+                                )
                                 .padding(.bottom, 14)
                                 .id(msg.id)
+                            } else if msg.role == .planRevised {
+                                PlanRevisedIndicator()
+                                    .padding(.bottom, 14)
+                                    .id(msg.id)
                             } else {
                                 let isLast = i == messages.count - 1 && !isThinking
                                 let status = actionStatus(at: i, in: messages)

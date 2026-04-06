@@ -26,27 +26,33 @@ struct TimelineRow: View {
         message.role == .action ? 5 : 4
     }
 
+    private var dotTopPadding: CGFloat {
+        message.role == .action ? 14 : 12
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            // Timeline column
-            VStack(spacing: 0) {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: dotSize, height: dotSize)
-                    .padding(.top, message.role == .action ? 14 : 12)
-
-                if showLine {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.06))
-                        .frame(width: 0.5)
-                        .frame(maxHeight: .infinity)
-                }
-            }
-            .frame(width: 8)
+            // Timeline column — just the dot
+            Circle()
+                .fill(dotColor)
+                .frame(width: dotSize, height: dotSize)
+                .padding(.top, dotTopPadding)
+                .frame(width: 8, alignment: .top)
 
             // Content
             messageContent
                 .padding(.bottom, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(alignment: .topLeading) {
+            // Connecting line — placed in background so it can stretch to full row height
+            if showLine {
+                Rectangle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: 0.5)
+                    .padding(.leading, (8 - 0.5) / 2)
+                    .padding(.top, dotTopPadding + dotSize + 2)
+            }
         }
     }
 
@@ -427,11 +433,9 @@ struct ErrorOrSystemContent: View {
 struct ThinkingTimelineRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            VStack(spacing: 0) {
-                PulsingDot()
-                    .padding(.top, 10)
-            }
-            .frame(width: 8)
+            PulsingDot()
+                .padding(.top, 10)
+                .frame(width: 8, alignment: .top)
 
             HStack(spacing: 8) {
                 PanelThinkingDots()
@@ -441,6 +445,7 @@ struct ThinkingTimelineRow: View {
             }
             .padding(.top, 4)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

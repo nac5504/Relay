@@ -77,6 +77,16 @@ final class AgentStore {
         try await APIService.shared.sendMessage(agentId: agent.id.uuidString, text: text)
     }
 
+    func pauseAgent(_ agent: BrowserAgent) async throws {
+        try await APIService.shared.pauseAgent(id: agent.id.uuidString)
+        agent.relayStatus = .paused
+    }
+
+    func resumeAgent(_ agent: BrowserAgent) async throws {
+        try await APIService.shared.resumeAgent(id: agent.id.uuidString)
+        agent.relayStatus = .working
+    }
+
     // MARK: - Navigation
 
     func focusOnAgent(_ agent: BrowserAgent) {
@@ -117,22 +127,76 @@ final class AgentStore {
             mainChatMessages.append(ChatMessage(role: .user, text: text))
             try await createAgent(task: task, agentName: name)
         } else if text.hasPrefix("/stop") {
-            let targetName = text.dropFirst("/stop".count).trimmingCharacters(in: .whitespaces)
+            // /stop pauses the plan execution (agent + container stay alive — use /resume to continue)
+            let targetName = text.dropFirst("/stop".count)
+                .trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "@", with: "")
             mainChatMessages.append(ChatMessage(role: .user, text: text))
-            if !targetName.isEmpty, let agent = agents.first(where: { $0.agentName.lowercased() == targetName.lowercased() }) {
-                let name = agent.agentName
-                try await deleteAgent(agent)
-                mainChatMessages.append(ChatMessage(role: .assistant, text: "Stopped **\(name)**."))
-            } else if let agent = focusedAgent {
-                let name = agent.agentName
-                try await deleteAgent(agent)
-                mainChatMessages.append(ChatMessage(role: .assistant, text: "Stopped **\(name)**."))
-            } else if let agent = agents.last {
-                let name = agent.agentName
-                try await deleteAgent(agent)
-                mainChatMessages.append(ChatMessage(role: .assistant, text: "Stopped **\(name)**."))
+
+            let target: BrowserAgent?
+            if !targetName.isEmpty {
+                target = agents.first(where: { $0.agentName.lowercased() == targetName.lowercased() })
+                if target == nil {
+                    mainChatMessages.append(ChatMessage(role: .assistant, text: "No agent named \"\(targetName)\"."))
+                    return
+                }
             } else {
-                mainChatMessages.append(ChatMessage(role: .assistant, text: "No agents to stop."))
+                target = focusedAgent ?? agents.first(where: { $0.relayStatus == .working || $0.relayStatus == .waiting }) ?? agents.last
+            }
+
+            guard let agent = target else {
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "No agents to pause."))
+                return
+            }
+
+            let name = agent.agentName
+            switch agent.relayStatus {
+            case .working, .waiting:
+                do {
+                    try await pauseAgent(agent)
+                    mainChatMessages.append(ChatMessage(role: .assistant, text: "Paused **\(name)**. Use `/resume \(name)` or send a new message to continue."))
+                } catch {
+                    mainChatMessages.append(ChatMessage(role: .assistant, text: "Failed to pause **\(name)**: \(error.localizedDescription)"))
+                }
+            case .paused:
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "**\(name)** is already paused."))
+            case .starting, .planning:
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "**\(name)** is still planning — nothing to pause yet."))
+            case .completed, .stopped, .error, .notStarted:
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "**\(name)** is not running (\(agent.relayStatus.displayName))."))
+            }
+        } else if text.hasPrefix("/resume") {
+            let targetName = text.dropFirst("/resume".count)
+                .trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "@", with: "")
+            mainChatMessages.append(ChatMessage(role: .user, text: text))
+
+            let target: BrowserAgent?
+            if !targetName.isEmpty {
+                target = agents.first(where: { $0.agentName.lowercased() == targetName.lowercased() })
+                if target == nil {
+                    mainChatMessages.append(ChatMessage(role: .assistant, text: "No agent named \"\(targetName)\"."))
+                    return
+                }
+            } else {
+                target = focusedAgent ?? agents.first(where: { $0.relayStatus == .paused }) ?? agents.last
+            }
+
+            guard let agent = target else {
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "No agents to resume."))
+                return
+            }
+
+            guard agent.relayStatus == .paused else {
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "**\(agent.agentName)** is not paused (\(agent.relayStatus.displayName))."))
+                return
+            }
+
+            do {
+                try await resumeAgent(agent)
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "Resumed **\(agent.agentName)**."))
+            } catch {
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "Failed to resume **\(agent.agentName)**: \(error.localizedDescription)"))
             }
         } else if text.hasPrefix("/focus") {
             let targetName = text.dropFirst("/focus".count)
@@ -210,13 +274,6 @@ final class AgentStore {
             if let mainIdx = mainChatMessages.lastIndex(where: { $0.id == last.id }) {
                 mainChatMessages[mainIdx] = updated
             }
-
-            // Check if accumulated text now contains <plan/> and we have a pending plan
-            if let pending = agent.pendingPlan, updated.text.contains("<plan/>") {
-                agent.planSnapshots[updated.id] = pending
-                agent.currentPlanMessageId = updated.id
-                agent.pendingPlan = nil
-            }
         } else {
             let chatRole: ChatMessage.Role = role == "user" ? .user : .assistant
             let msg = ChatMessage(role: chatRole, text: text, agentName: role == "assistant" ? agent.agentName : nil)
@@ -224,21 +281,38 @@ final class AgentStore {
             if role != "user" {
                 mainChatMessages.append(msg)
             }
-
-            // Check non-streamed messages too
-            if role == "assistant", let pending = agent.pendingPlan, text.contains("<plan/>") {
-                agent.planSnapshots[msg.id] = pending
-                agent.currentPlanMessageId = msg.id
-                agent.pendingPlan = nil
-            }
         }
     }
 
     func handlePlanUpdate(agentId: String, steps: [PlanStep], version: Int) {
         guard let agent = findAgent(id: agentId) else { return }
 
-        // Store pending plan — will be associated with the next assistant message containing <plan/>
-        agent.pendingPlan = (version: version, steps: steps)
+        // Mark previous .plan messages as .planRevised
+        for i in agent.planMessages.indices {
+            if agent.planMessages[i].role == .plan {
+                let old = agent.planMessages[i]
+                agent.planMessages[i] = ChatMessage(
+                    id: old.id, role: .planRevised, text: old.text,
+                    timestamp: old.timestamp, agentName: old.agentName
+                )
+            }
+        }
+        for i in mainChatMessages.indices {
+            if mainChatMessages[i].role == .plan && mainChatMessages[i].agentName == agent.agentName {
+                let old = mainChatMessages[i]
+                mainChatMessages[i] = ChatMessage(
+                    id: old.id, role: .planRevised, text: old.text,
+                    timestamp: old.timestamp, agentName: old.agentName
+                )
+            }
+        }
+
+        // Insert new .plan message
+        let planMsg = ChatMessage(role: .plan, text: "", agentName: agent.agentName)
+        agent.planMessages.append(planMsg)
+        mainChatMessages.append(planMsg)
+
+        // Update plan data
         agent.planSteps = steps
         if version > agent.planVersion {
             agent.planRevisionCount += 1
