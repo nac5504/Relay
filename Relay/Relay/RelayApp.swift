@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct RelayApp: App {
     init() {
-        startBackendProcess()
+        // Backend is started manually via `cd backend && pnpm dev`
         Task {
             await RelayApp.waitForBackend()
             WebSocketManager.shared.connect()
