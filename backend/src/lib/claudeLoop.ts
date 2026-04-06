@@ -14,11 +14,19 @@ import * as docker from './dockerManager';
 import { getApiKey } from './config';
 import * as outputManager from './outputManager';
 import { ComputerToolInput, AnthropicMessage, StructuredPlan } from './types';
+import { checkStallGuard, createStallGuardState, StallGuardConfig } from './stallGuard';
 
 const MODEL = 'claude-sonnet-4-6';
 const MAX_TOKENS = 4096;
 const LOOP_DELAY_MS = 2000;
 const MAX_ITERATIONS = 200;
+
+const STALL_GUARD: StallGuardConfig = {
+  stepIterBudget: 30,
+  stepTimeBudgetMs: 4 * 60_000,
+  maxTaskMs: 20 * 60_000,
+  nudgeAtFrac: 0.7,
+};
 
 // Per docs: computer-use-2025-11-24 for Opus 4.6, Sonnet 4.6, Opus 4.5
 const BETA_HEADER = 'computer-use-2025-11-24' as const;
@@ -44,6 +52,15 @@ function describeAction(toolInput: ComputerToolInput): string {
     case 'wait':         return `Waited ${toolInput.duration ?? 1}s`;
     default:             return action;
   }
+}
+
+/** Append a [System] text block to the trailing user message so the next API
+ * call carries the note alongside any tool_results. Safe no-op if the last
+ * message isn't a user message. */
+function appendSystemTextToLastUserMessage(messages: AnthropicMessage[], text: string): void {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'user') return;
+  last.content.push({ type: 'text', text });
 }
 
 function buildStepsPrompt(plan: StructuredPlan): string {
@@ -160,8 +177,26 @@ If you need clarification, say "Waiting for input:" followed by your question an
       });
     }
 
+    const stallState = createStallGuardState();
+
     while (iterations < MAX_ITERATIONS) {
       iterations++;
+
+      // Stall guard: nudge → force-complete → task timeout
+      const decision = checkStallGuard(stallState, STALL_GUARD, plan, iterations, agent.startedAt);
+      if (decision.kind === 'task_timeout') {
+        console.warn(`[loop:${agentId.slice(0,8)}] ⏱  ${decision.reason} — aborting`);
+        registry.update(agentId, { status: 'error', error: decision.reason });
+        wsHub.broadcast({ type: 'agent_update', agentId, status: 'error', error: decision.reason });
+        break;
+      } else if (decision.kind === 'force_complete') {
+        console.warn(`[loop:${agentId.slice(0,8)}] ⏭  force-completing step ${decision.stepNumber}`);
+        if (plan) handleStepComplete(agentId, plan, decision.stepNumber);
+        appendSystemTextToLastUserMessage(messages, decision.text);
+      } else if (decision.kind === 'nudge') {
+        console.log(`[loop:${agentId.slice(0,8)}] 📣 nudging model to wrap up current step`);
+        appendSystemTextToLastUserMessage(messages, decision.text);
+      }
 
       const pendingMsg = messageQueue.consumePending(agentId);
       if (pendingMsg) {
@@ -378,7 +413,8 @@ If you need clarification, say "Waiting for input:" followed by your question an
       if (finalAgent?.containerName) {
         const files = await outputManager.retrieveOutputs(finalAgent.containerName, agentId);
         if (files.length > 0) {
-          wsHub.broadcast({ type: 'files_ready', agentId, files });
+          const localDir = outputManager.outputDir(agentId);
+          wsHub.broadcast({ type: 'files_ready', agentId, files, localDir });
         }
       }
     } catch (err) {

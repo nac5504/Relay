@@ -8,9 +8,33 @@ import * as recordingManager from './recordingManager';
 import { getApiKey } from './config';
 import { StructuredPlan } from './types';
 import * as messageQueue from './messageQueue';
+import { checkStallGuard, createStallGuardState, StallGuardConfig } from './stallGuard';
 
 const MODEL = 'claude-sonnet-4-6';
 const MAX_ITERATIONS = 50;
+
+const STALL_GUARD: StallGuardConfig = {
+  stepIterBudget: 20,
+  stepTimeBudgetMs: 3 * 60_000,
+  maxTaskMs: 20 * 60_000,
+  nudgeAtFrac: 0.7,
+};
+
+/** Append a [System] text block to the trailing user message so the next API
+ * call carries the note alongside any tool_results. Safe no-op if the last
+ * message isn't a user message. Handles both string- and array-typed content. */
+function appendSystemTextToLastUserMessage(messages: Anthropic.MessageParam[], text: string): void {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'user') return;
+  if (typeof last.content === 'string') {
+    last.content = [
+      { type: 'text', text: last.content },
+      { type: 'text', text },
+    ];
+  } else {
+    last.content.push({ type: 'text', text });
+  }
+}
 
 function buildStepsPrompt(plan: StructuredPlan): string {
   return plan.steps.map(s =>
@@ -141,6 +165,8 @@ When done, state "Task completed." and stop.`;
     });
   }
 
+  const stallState = createStallGuardState();
+
   try {
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -153,6 +179,22 @@ When done, state "Task completed." and stop.`;
         await new Promise<void>((r) => setTimeout(r, 500));
         iterations--; // don't count paused iterations against the cap
         continue;
+      }
+
+      // Stall guard: nudge → force-complete → task timeout
+      const decision = checkStallGuard(stallState, STALL_GUARD, plan, iterations, agent.startedAt);
+      if (decision.kind === 'task_timeout') {
+        console.warn(`[bash:${agentId.slice(0,8)}] ⏱  ${decision.reason} — aborting`);
+        registry.update(agentId, { status: 'error', error: decision.reason });
+        wsHub.broadcast({ type: 'agent_update', agentId, status: 'error', error: decision.reason });
+        break;
+      } else if (decision.kind === 'force_complete') {
+        console.warn(`[bash:${agentId.slice(0,8)}] ⏭  force-completing step ${decision.stepNumber}`);
+        if (plan) handleStepComplete(agentId, plan, decision.stepNumber);
+        appendSystemTextToLastUserMessage(messages, decision.text);
+      } else if (decision.kind === 'nudge') {
+        console.log(`[bash:${agentId.slice(0,8)}] 📣 nudging model to wrap up current step`);
+        appendSystemTextToLastUserMessage(messages, decision.text);
       }
 
       // Check for user interrupt messages
@@ -258,7 +300,8 @@ When done, state "Task completed." and stop.`;
       if (finalAgent?.containerName) {
         const files = await outputManager.retrieveOutputs(finalAgent.containerName, agentId);
         if (files.length > 0) {
-          wsHub.broadcast({ type: 'files_ready', agentId, files });
+          const localDir = outputManager.outputDir(agentId);
+          wsHub.broadcast({ type: 'files_ready', agentId, files, localDir });
         }
       }
     } catch (err) {

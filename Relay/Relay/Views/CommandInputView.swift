@@ -98,7 +98,16 @@ struct HighlightedTextEditor: NSViewRepresentable {
         var parent: HighlightedTextEditor
         var updating = false
         private let mentionRegex = try! NSRegularExpression(pattern: "@[a-zA-Z0-9_]+")
-        private let commandRegex = try! NSRegularExpression(pattern: "(?:^|(?<=\\s))/[a-zA-Z0-9_]+")
+        private let commandRegex = try! NSRegularExpression(pattern: "/[a-zA-Z0-9_]+")
+
+        /// True if the match is at the start of the string or preceded by whitespace.
+        private func isStandalone(_ match: NSTextCheckingResult, in nsText: NSString) -> Bool {
+            let start = match.range.location
+            if start == 0 { return true }
+            let prev = nsText.character(at: start - 1)
+            guard let scalar = Unicode.Scalar(prev) else { return false }
+            return CharacterSet.whitespacesAndNewlines.contains(scalar)
+        }
 
         init(_ parent: HighlightedTextEditor) { self.parent = parent }
 
@@ -114,16 +123,17 @@ struct HighlightedTextEditor: NSViewRepresentable {
         func highlight(_ tv: NSTextView) {
             guard let s = tv.textStorage else { return }
             let t = tv.string
-            let r = NSRange(location: 0, length: (t as NSString).length)
+            let nsText = t as NSString
+            let r = NSRange(location: 0, length: nsText.length)
             guard r.length > 0 else { return }
             let sel = tv.selectedRanges
             s.beginEditing()
             s.addAttribute(.foregroundColor, value: NSColor.white, range: r)
             s.addAttribute(.font, value: parent.font, range: r)
-            for m in mentionRegex.matches(in: t, range: r) {
+            for m in mentionRegex.matches(in: t, range: r) where isStandalone(m, in: nsText) {
                 s.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: m.range)
             }
-            for m in commandRegex.matches(in: t, range: r) {
+            for m in commandRegex.matches(in: t, range: r) where isStandalone(m, in: nsText) {
                 s.addAttribute(.foregroundColor, value: NSColor.systemCyan, range: m.range)
             }
             s.endEditing()

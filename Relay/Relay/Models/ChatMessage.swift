@@ -9,6 +9,8 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var agentName: String?
     var isLoading: Bool
     var isError: Bool
+    var files: [String]?        // Basenames for .files role messages
+    var filesDir: String?       // Absolute local directory for .files role messages
 
     enum Role: String, Codable {
         case user
@@ -19,6 +21,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         case output
         case plan          // Inline plan checklist (current version)
         case planRevised   // Collapsed "Plan revised" indicator (superseded version)
+        case files         // Inline hyperlinks to output files (reveal in Finder)
     }
 
     enum ActionKind: String, Codable {
@@ -54,7 +57,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     /// The action kind inferred from description text
     var actionKind: ActionKind {
         let t = text.lowercased()
-        if t.hasPrefix("ran:") || t.hasPrefix("restarted bash") { return .bash }
+        if t.hasPrefix("ran:") || t.hasPrefix("restarted bash") || t.hasPrefix("$ ") { return .bash }
         if t.hasPrefix("typed") || t.hasPrefix("pressed") { return .keyboard }
         if t.hasPrefix("clicked") || t.hasPrefix("right-clicked") || t.hasPrefix("double-clicked")
             || t.hasPrefix("triple-clicked") || t.hasPrefix("dragged") || t.hasPrefix("moved mouse") { return .click }
@@ -87,7 +90,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         return t
     }
 
-    init(id: UUID = UUID(), role: Role, text: String, timestamp: Date = Date(), agentName: String? = nil, isLoading: Bool = false, isError: Bool = false) {
+    init(id: UUID = UUID(), role: Role, text: String, timestamp: Date = Date(), agentName: String? = nil, isLoading: Bool = false, isError: Bool = false, files: [String]? = nil, filesDir: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -95,6 +98,8 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         self.agentName = agentName
         self.isLoading = isLoading
         self.isError = isError
+        self.files = files
+        self.filesDir = filesDir
     }
 }
 
@@ -113,8 +118,12 @@ enum ActionStatus {
     }
 }
 
-/// Determines action success/failure by looking at the next assistant message
+/// Determines action success/failure by looking at the next assistant message.
+/// Tolerates a stale `index` (e.g. from a LazyVStack row that's being torn down
+/// after `messages` shrank from a focus change) by returning `.neutral` instead
+/// of trapping.
 func actionStatus(at index: Int, in messages: [ChatMessage]) -> ActionStatus {
+    guard messages.indices.contains(index) else { return .neutral }
     let msg = messages[index]
     guard msg.role == .action else { return .neutral }
 
