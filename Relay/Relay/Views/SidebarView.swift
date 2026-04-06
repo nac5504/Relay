@@ -161,9 +161,10 @@ private struct AgentSidebarRow: View {
             .buttonStyle(.plain)
             .foregroundStyle(.white.opacity(0.7))
 
-            // Task description
-            if !agent.task.isEmpty {
-                Text(agent.task)
+            // Task title (AI-generated) or fallback to full task
+            let subtitle = agent.taskTitle.isEmpty ? agent.task : agent.taskTitle
+            if !subtitle.isEmpty {
+                Text(subtitle)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.3))
                     .lineLimit(2)
