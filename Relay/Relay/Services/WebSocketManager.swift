@@ -191,7 +191,20 @@ final class WebSocketManager: @unchecked Sendable {
             case "files_ready":
                 guard let agentId = json["agentId"] as? String,
                       let files = json["files"] as? [String] else { return }
-                store.updateAgent(id: agentId) { $0.outputFiles = files }
+                let localDir = json["localDir"] as? String
+                store.updateAgent(id: agentId) { agent in
+                    agent.outputFiles = files
+                    agent.outputDir = localDir
+                    let msg = ChatMessage(
+                        role: .files,
+                        text: "",
+                        agentName: agent.agentName,
+                        files: files,
+                        filesDir: localDir
+                    )
+                    agent.chatMessages.append(msg)
+                    store.mainChatMessages.append(msg)
+                }
 
             case "docker_build_progress":
                 if let line = json["line"] as? String {

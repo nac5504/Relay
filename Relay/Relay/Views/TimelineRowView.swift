@@ -99,6 +99,9 @@ struct TimelineRow: View {
         case .system:
             ErrorOrSystemContent(message: message)
 
+        case .files:
+            InlineFileLinks(files: message.files ?? [], dir: message.filesDir)
+
         case .plan, .planRevised:
             EmptyView() // Handled inline before reaching this view
         }
