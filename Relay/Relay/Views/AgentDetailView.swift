@@ -69,10 +69,10 @@ struct AgentDetailView: View {
                     .frame(height: 1)
 
                 // Stream area — show recording playback for completed agents, live stream for active
-                if agent.relayStatus == .completed || agent.relayStatus == .stopped {
+                if agent.relayStatus == .completed || agent.relayStatus == .stopped || agent.relayStatus == .error {
                     RecordingPlaybackView(agent: agent)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if agent.noVNCPort > 0, let _ = agent.noVNCURL {
+                } else if agent.noVNCPort > 0, agent.noVNCURL != nil {
                     BrowserStreamView(agent: agent, onFPSUpdate: { agent.fps = $0 })
                 } else {
                     // Loading placeholder
