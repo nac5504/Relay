@@ -86,9 +86,9 @@ async function bootOne(): Promise<void> {
   console.log(`[warmPool] Container ${containerName} started — waiting for noVNC on port ${ports.noVNC}...`);
   await waitForReady(ports.noVNC);
 
-  // Fix permissions: recordings dir + Chrome profile
+  // Post-boot setup: recordings dir, chromium symlink, keyboard, Chrome profile permissions
   await dockerRun(['exec', '-u', 'root', containerName, 'bash', '-c',
-    'mkdir -p /recordings && chmod 777 /recordings && chown -R computeruse:computeruse /home/computeruse/.config/chromium 2>/dev/null || true']);
+    'mkdir -p /recordings && chmod 777 /recordings && /usr/local/bin/setup-chromium.sh && chown -R computeruse:computeruse /home/computeruse/.config/chromium 2>/dev/null || true']);
 
   // Set desktop wallpaper via pcmanfm (creates a DESKTOP-type window above mutter's background)
   execInContainer(containerName,

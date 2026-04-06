@@ -75,7 +75,7 @@ export interface ContainerInfo {
 }
 
 let imageReady = false;
-const IMAGE_VERSION = '8'; // bump — fix coordinate list/tuple bug in relay_tool_runner
+const IMAGE_VERSION = '9'; // bump — setup-chromium.sh for portable chromium alias
 
 export async function ensureImage(): Promise<void> {
   if (imageReady) return;
@@ -122,13 +122,12 @@ export async function startContainer(agentId: string, sessionId: string, chromeP
   args.push(RELAY_IMAGE);
   await dockerRun(args);
 
-  // Fix permissions on mounted Chrome profile (volume mounts as root)
-  if (chromeProfilePath) {
-    await dockerRun(['exec', '-u', 'root', containerName, 'chown', '-R', 'computeruse:computeruse', '/home/computeruse/.config/chromium']);
-    // Also create the symlink for chromium binary
-    await dockerRun(['exec', '-u', 'root', containerName, 'bash', '-c',
-      'ln -sf $(find /home/computeruse/.cache/ms-playwright -name "chrome" -path "*/chrome-linux/chrome" -type f 2>/dev/null | head -1) /usr/local/bin/chromium 2>/dev/null || true']);
-  }
+  // Post-boot setup: chromium symlink, keyboard layout, Chrome profile permissions
+  await dockerRun(['exec', '-u', 'root', containerName, 'bash', '-c',
+    '/usr/local/bin/setup-chromium.sh; ' +
+    (chromeProfilePath ? 'chown -R computeruse:computeruse /home/computeruse/.config/chromium 2>/dev/null; ' : '') +
+    'true'
+  ]).catch(() => {});
 
   return { containerName, noVNCPort: ports.noVNC, vncPort: ports.vnc };
 }
