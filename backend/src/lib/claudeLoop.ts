@@ -163,7 +163,7 @@ If you need clarification, say "Waiting for input:" followed by your question an
     if (planSteps.length > 0) {
       wsHub.broadcast({ type: 'task_list', agentId, steps: planSteps });
       // Mark first step as active
-      wsHub.broadcast({ type: 'task_update', agentId, stepIndex: 0, status: 'active' });
+      wsHub.broadcast({ type: 'task_update', agentId, timestampMs: Date.now() - (registry.get(agentId)?.startedAt ?? Date.now()), stepIndex: 0, status: 'active' });
     }
     const completedSteps = new Set<number>();
     let currentActiveStep = 0;
@@ -236,13 +236,17 @@ If you need clarification, say "Waiting for input:" followed by your question an
           if (planSteps.length > 0) {
             const progress = detectStepProgress(block.text, planSteps, completedSteps, currentActiveStep);
             for (const stepIdx of progress.completed) {
+              const ts = Date.now() - (registry.get(agentId)?.startedAt ?? Date.now());
               completedSteps.add(stepIdx);
-              wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepIdx, status: 'completed' });
+              wsHub.broadcast({ type: 'task_update', agentId, timestampMs: ts, stepIndex: stepIdx, status: 'completed' });
+              recordingManager.logStepEvent(sessionId, { stepIndex: stepIdx, status: 'completed', timestampMs: ts, title: planSteps[stepIdx] });
               console.log(`[loop:${agentId.slice(0,8)}] ✅ Step ${stepIdx + 1} completed`);
             }
             if (progress.active !== null && progress.active !== currentActiveStep) {
+              const ts = Date.now() - (registry.get(agentId)?.startedAt ?? Date.now());
               currentActiveStep = progress.active;
-              wsHub.broadcast({ type: 'task_update', agentId, stepIndex: currentActiveStep, status: 'active' });
+              wsHub.broadcast({ type: 'task_update', agentId, timestampMs: ts, stepIndex: currentActiveStep, status: 'active' });
+              recordingManager.logStepEvent(sessionId, { stepIndex: currentActiveStep, status: 'active', timestampMs: ts, title: planSteps[currentActiveStep] });
               console.log(`[loop:${agentId.slice(0,8)}] 🔄 Now working on step ${currentActiveStep + 1}`);
             }
           }

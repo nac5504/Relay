@@ -54,7 +54,7 @@ When done, state "Task completed." and stop.`;
   const planSteps = parsePlanSteps(agent.task);
   if (planSteps.length > 0) {
     wsHub.broadcast({ type: 'task_list', agentId, steps: planSteps });
-    wsHub.broadcast({ type: 'task_update', agentId, stepIndex: 0, status: 'active' });
+    wsHub.broadcast({ type: 'task_update', agentId, timestampMs: Date.now() - (registry.get(agentId)?.startedAt ?? Date.now()), stepIndex: 0, status: 'active' });
   }
   let stepsCompleted = 0;
 
@@ -167,10 +167,13 @@ When done, state "Task completed." and stop.`;
         // Check if any tool had an error
         const hasError = toolResults.some(r => typeof r.content === 'string' && r.content.startsWith('Error:'));
         if (!hasError) {
-          wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepsCompleted, status: 'completed' });
+          const ts = Date.now() - (registry.get(agentId)?.startedAt ?? Date.now());
+          wsHub.broadcast({ type: 'task_update', agentId, timestampMs: ts, stepIndex: stepsCompleted, status: 'completed' });
+          recordingManager.logStepEvent(sessionId, { stepIndex: stepsCompleted, status: 'completed', timestampMs: ts, title: planSteps[stepsCompleted] });
           stepsCompleted++;
           if (stepsCompleted < planSteps.length) {
-            wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepsCompleted, status: 'active' });
+            wsHub.broadcast({ type: 'task_update', agentId, timestampMs: ts, stepIndex: stepsCompleted, status: 'active' });
+            recordingManager.logStepEvent(sessionId, { stepIndex: stepsCompleted, status: 'active', timestampMs: ts, title: planSteps[stepsCompleted] });
           }
         }
       }

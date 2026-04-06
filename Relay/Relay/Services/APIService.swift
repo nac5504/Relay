@@ -116,6 +116,11 @@ final class APIService: Sendable {
         return resp.files
     }
 
+    func fetchTimeline(sessionId: String) async throws -> [String: Any] {
+        let data = try await request("/recordings/\(sessionId.lowercased())/timeline")
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+
     func recordingURL(sessionId: String) -> URL {
         var url = base
         url.appendPathComponent("recordings")
