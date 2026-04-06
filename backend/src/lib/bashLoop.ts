@@ -95,7 +95,7 @@ When done, state "Task completed." and stop.`;
         properties: {
           command: { type: 'string', enum: ['view', 'create', 'str_replace', 'insert'] },
           path: { type: 'string', description: 'Absolute file path' },
-          new_file_text: { type: 'string', description: 'Full file content (for create)' },
+          file_text: { type: 'string', description: 'Full file content (for create)' },
           old_str: { type: 'string', description: 'String to replace (for str_replace)' },
           new_str: { type: 'string', description: 'Replacement string' },
           insert_line: { type: 'number', description: 'Line number to insert after' },
