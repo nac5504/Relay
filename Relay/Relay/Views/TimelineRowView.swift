@@ -30,29 +30,36 @@ struct TimelineRow: View {
         message.role == .action ? 14 : 12
     }
 
+    private var lineColor: Color {
+        Color.white.opacity(0.22)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            // Timeline column — just the dot
-            Circle()
-                .fill(dotColor)
-                .frame(width: dotSize, height: dotSize)
-                .padding(.top, dotTopPadding)
-                .frame(width: 8, alignment: .top)
+            // Timeline column — top stub line, dot, and bottom connecting line
+            VStack(spacing: 0) {
+                Color.clear.frame(width: 1, height: dotTopPadding)
+
+                if message.role != .user {
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: dotSize, height: dotSize)
+                }
+
+                if showLine {
+                    Rectangle()
+                        .fill(lineColor)
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
+                        .padding(.top, 2)
+                }
+            }
+            .frame(width: 8)
 
             // Content
             messageContent
                 .padding(.bottom, 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(alignment: .topLeading) {
-            // Connecting line — placed in background so it can stretch to full row height
-            if showLine {
-                Rectangle()
-                    .fill(Color.white.opacity(0.06))
-                    .frame(width: 0.5)
-                    .padding(.leading, (8 - 0.5) / 2)
-                    .padding(.top, dotTopPadding + dotSize + 2)
-            }
         }
     }
 
@@ -449,6 +456,7 @@ struct ThinkingTimelineRow: View {
             .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 8)
     }
 }
 

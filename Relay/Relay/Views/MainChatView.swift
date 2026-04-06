@@ -34,11 +34,15 @@ struct MainChatView: View {
         }
     }
 
-    /// Splits `filteredMainChatMessages` into planning/acting sections. Each
-    /// `.plan` message is a section boundary; `.planRevised` messages remain
-    /// as inline indicators inside whichever section they fall into.
-    private var sections: [ChatSection] {
-        let messages = store.filteredMainChatMessages
+    /// Splits the supplied `messages` snapshot into planning/acting sections.
+    /// Only `.plan` messages whose owning agent has `planComplete == true`
+    /// (i.e. the user has approved the plan) become section boundaries.
+    /// Intermediate plan revisions stay inline as no-op rows so they don't
+    /// pin a header. Takes `messages` as a parameter so callers can guarantee
+    /// the indices stamped on each `Item` match the array later passed to
+    /// `rowView` — re-reading `store.filteredMainChatMessages` separately
+    /// would race with focus changes and crash with stale indices.
+    private func sections(from messages: [ChatMessage]) -> [ChatSection] {
         var result: [ChatSection] = []
         var currentKind: ChatSection.Kind = .planning
         var currentHeader: ChatMessage? = nil
@@ -57,7 +61,9 @@ struct MainChatView: View {
         }
 
         for (i, msg) in messages.enumerated() {
-            if msg.role == .plan {
+            let isFinalizedPlan = msg.role == .plan
+                && (agentForPlanMessage(msg)?.planComplete ?? false)
+            if isFinalizedPlan {
                 flush()
                 currentKind = .acting
                 currentHeader = msg
@@ -94,17 +100,24 @@ struct MainChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Snapshot the filtered messages exactly once per body evaluation so
+        // every index we hand to `rowView` is anchored to the same array.
+        // `filteredMainChatMessages` is computed and shrinks the moment a
+        // user focuses an agent — re-reading it from inside `rowView` while
+        // a stale `item.index` is in flight is what was crashing the LazyVStack.
+        let messages = store.filteredMainChatMessages
+        let chatSections = sections(from: messages)
+        return VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        ForEach(sections) { section in
+                        ForEach(chatSections) { section in
                             if let header = section.header {
                                 // Acting section: PlanChecklist pins to the top
                                 // while its execution rows scroll underneath.
                                 Section {
                                     ForEach(section.items) { item in
-                                        rowView(for: item.message, at: item.index)
+                                        rowView(for: item.message, at: item.index, in: messages)
                                             .padding(.horizontal, 16)
                                     }
                                 } header: {
@@ -115,13 +128,13 @@ struct MainChatView: View {
                                 // items inline so SwiftUI's pinning machinery
                                 // isn't asked to track an empty header slot.
                                 ForEach(section.items) { item in
-                                    rowView(for: item.message, at: item.index)
+                                    rowView(for: item.message, at: item.index, in: messages)
                                         .padding(.horizontal, 16)
                                 }
                             }
                         }
 
-                        if hasWorkingAgent && store.filteredMainChatMessages.last?.role != .user {
+                        if hasWorkingAgent && messages.last?.role != .user {
                             MainThinkingRow()
                                 .padding(.horizontal, 16)
                                 .id("main-thinking")
@@ -174,35 +187,82 @@ struct MainChatView: View {
     @ViewBuilder
     private func planStickyHeader(for message: ChatMessage) -> some View {
         let planAgent = agentForPlanMessage(message)
-        PlanChecklist(
-            steps: planAgent?.planSteps ?? [],
-            version: planAgent?.planVersion ?? 1
-        )
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(red: 0x28/255, green: 0x2A/255, blue: 0x28/255))
-        )
-        .padding(.horizontal, 16)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Final Plan")
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.55))
+                .textCase(.uppercase)
+                .tracking(1.0)
+                .padding(.horizontal, 20)
+
+            PlanChecklist(
+                steps: planAgent?.planSteps ?? [],
+                version: planAgent?.planVersion ?? 1
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(red: 0x28/255, green: 0x2A/255, blue: 0x28/255))
+            )
+            .padding(.horizontal, 16)
+        }
         .padding(.top, 10)
         .padding(.bottom, 14)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .id(message.id)
     }
 
     /// Renders a single timeline row. Mirrors the rules from the original
     /// inline loop (bash/output merging, first-for-agent avatar header,
     /// action status colouring) using the row's original chronological
-    /// index inside `filteredMainChatMessages`.
+    /// index inside the supplied `messages` snapshot. The snapshot is passed
+    /// in (not re-read from `store`) so the index can never refer to a
+    /// different array than the one `sections(from:)` stamped it against.
     @ViewBuilder
-    private func rowView(for msg: ChatMessage, at i: Int) -> some View {
-        let messages = store.filteredMainChatMessages
-        if msg.role == .output && i > 0 && messages[i - 1].role == .action && messages[i - 1].actionKind == .bash {
+    private func rowView(for msg: ChatMessage, at i: Int, in messages: [ChatMessage]) -> some View {
+        if !messages.indices.contains(i) {
+            // Stale index from a row LazyVStack is tearing down after a
+            // focus change shrank the array — render nothing.
+            EmptyView()
+        } else if msg.role == .output && i > 0 && messages[i - 1].role == .action && messages[i - 1].actionKind == .bash {
             // Merged into the preceding bash card
             EmptyView()
         } else if msg.role == .planRevised {
             PlanRevisedIndicator()
                 .padding(.bottom, 14)
                 .id(msg.id)
+        } else if msg.role == .plan {
+            let planAgent = agentForPlanMessage(msg)
+            HStack(alignment: .top, spacing: 14) {
+                // Timeline gutter — top stub, dot, bottom line. Drawn
+                // continuously so the line from the previous agent row flows
+                // through the plan dot and into the next agent row without
+                // gaps. Aligns with `MainTimelineRow`'s gutter pattern.
+                VStack(spacing: 0) {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: 1, height: 14)
+                    Circle()
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: 5, height: 5)
+                    Rectangle()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
+                        .padding(.top, 2)
+                }
+                .frame(width: 8)
+
+                // Bottom padding lives inside the HStack on the content side
+                // so the HStack's height (and therefore the gutter's bottom
+                // line) extends through the inter-row gap. Putting it on the
+                // outer HStack would leave a 14-pt gap below the line.
+                PlanChecklist(
+                    steps: planAgent?.planSteps ?? [],
+                    version: planAgent?.planVersion ?? 1
+                )
+                .padding(.bottom, 14)
+            }
+            .id(msg.id)
         } else {
             let isLast = i == messages.count - 1 && !hasWorkingAgent
             let status = actionStatus(at: i, in: messages)
@@ -212,14 +272,24 @@ struct MainChatView: View {
             let isFirstForAgent: Bool = {
                 guard let name = msg.agentName else { return false }
                 if i == 0 { return true }
-                return messages[i - 1].agentName != name
+                let prev = messages[i - 1]
+                // User messages are breaks — the next agent message always
+                // starts a fresh "string" and should re-show the header.
+                if prev.role == .user { return true }
+                return prev.agentName != name
             }()
             let bashOutput: String? = (msg.role == .action && msg.actionKind == .bash && i + 1 < messages.count && messages[i + 1].role == .output) ? messages[i + 1].text : nil
+            // User messages are breaks in the agent timeline — no line should
+            // reach into or out of them.
+            let prevIsUser = i > 0 && messages[i - 1].role == .user
+            let nextIsUser = i + 1 < messages.count && messages[i + 1].role == .user
+            let breaksBefore = msg.role == .user || prevIsUser
+            let breaksAfter = msg.role == .user || nextIsUser
             MainTimelineRow(
                 message: msg,
                 isFirstForAgent: isFirstForAgent,
-                showLine: !isLast,
-                isFirstRow: i == 0,
+                showLine: !isLast && !breaksAfter,
+                showTopLine: i != 0 && !breaksBefore,
                 status: status,
                 agentAvatarURL: avatarURL,
                 agentColor: agentLineColor(for: msg.agentName),
@@ -271,7 +341,7 @@ private struct MainTimelineRow: View {
     let message: ChatMessage
     let isFirstForAgent: Bool
     let showLine: Bool
-    let isFirstRow: Bool
+    let showTopLine: Bool
     let status: ActionStatus
     var agentAvatarURL: URL? = nil
     var agentColor: Color = .white.opacity(0.15)
@@ -284,7 +354,7 @@ private struct MainTimelineRow: View {
     }
 
     private var lineColor: Color {
-        return .white.opacity(0.06)
+        return .white.opacity(0.22)
     }
 
     private var dotSize: CGFloat {
@@ -299,22 +369,24 @@ private struct MainTimelineRow: View {
         HStack(alignment: .top, spacing: 14) {
             // Timeline dot + connecting lines
             VStack(spacing: 0) {
-                if isFirstRow {
-                    Color.clear.frame(width: 0.5, height: topLineHeight)
-                } else {
+                if showTopLine {
                     Rectangle()
                         .fill(lineColor)
-                        .frame(width: 0.5, height: topLineHeight)
+                        .frame(width: 1, height: topLineHeight)
+                } else {
+                    Color.clear.frame(width: 1, height: topLineHeight)
                 }
 
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: dotSize, height: dotSize)
+                if message.role != .user {
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: dotSize, height: dotSize)
+                }
 
                 if showLine {
                     Rectangle()
                         .fill(lineColor)
-                        .frame(width: 0.5)
+                        .frame(width: 1)
                         .frame(maxHeight: .infinity)
                 }
             }
@@ -489,8 +561,8 @@ private struct MainThinkingRow: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(spacing: 0) {
                 Rectangle()
-                    .fill(Color.white.opacity(0.06))
-                    .frame(width: 0.5, height: 8)
+                    .fill(Color.white.opacity(0.22))
+                    .frame(width: 1, height: 8)
                 PulsingDot()
             }
             .frame(width: 8)

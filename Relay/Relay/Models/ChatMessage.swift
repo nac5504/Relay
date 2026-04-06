@@ -118,8 +118,12 @@ enum ActionStatus {
     }
 }
 
-/// Determines action success/failure by looking at the next assistant message
+/// Determines action success/failure by looking at the next assistant message.
+/// Tolerates a stale `index` (e.g. from a LazyVStack row that's being torn down
+/// after `messages` shrank from a focus change) by returning `.neutral` instead
+/// of trapping.
 func actionStatus(at index: Int, in messages: [ChatMessage]) -> ActionStatus {
+    guard messages.indices.contains(index) else { return .neutral }
     let msg = messages[index]
     guard msg.role == .action else { return .neutral }
 
