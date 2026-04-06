@@ -3,62 +3,104 @@ import SwiftUI
 @main
 struct RelayApp: App {
     init() {
-        restartBackend()
-        WebSocketManager.shared.connect()
-        Task { await AgentStore.shared.load() }
+        startBackendProcess()
+        Task {
+            await RelayApp.waitForBackend()
+            WebSocketManager.shared.connect()
+            await AgentStore.shared.load()
+        }
     }
 
-    private func restartBackend() {
-        let scriptDir = findProjectRoot()
-        guard let dir = scriptDir else {
-            print("[RelayApp] Could not find project root — skipping backend restart")
+    private func startBackendProcess() {
+        // Clean up stale relay-agent Docker containers
+        let cleanupProc = Process()
+        cleanupProc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        cleanupProc.arguments = ["-c", "docker ps -a --filter name=relay-agent -q | xargs -r docker rm -f 2>/dev/null || true"]
+        cleanupProc.environment = shellEnv()
+        try? cleanupProc.run()
+        cleanupProc.waitUntilExit()
+        print("[RelayApp] Cleaned up stale relay-agent containers")
+
+        // Kill anything already on port 3001
+        let killProc = Process()
+        killProc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        killProc.arguments = ["-c", "lsof -ti :3001 | xargs kill 2>/dev/null || true"]
+        killProc.environment = shellEnv()
+        try? killProc.run()
+        killProc.waitUntilExit()
+
+        guard let backendDir = findBackendDir() else {
+            print("[RelayApp] Could not find backend directory — skipping backend start")
             return
         }
 
-        let kill = dir.appendingPathComponent("kill.sh")
-        let startup = dir.appendingPathComponent("startup.sh")
+        let pnpmPath = findPnpm()
+        print("[RelayApp] Starting backend via \(pnpmPath) dev in \(backendDir.path)")
 
-        guard FileManager.default.fileExists(atPath: kill.path),
-              FileManager.default.fileExists(atPath: startup.path) else {
-            print("[RelayApp] kill.sh or startup.sh not found at \(dir.path)")
-            return
-        }
-
-        // Run kill then startup synchronously so backend is ready before we connect
-        runScript(kill)
-        runScript(startup)
-    }
-
-    private func runScript(_ url: URL) {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
-        proc.arguments = ["-l", url.path]  // login shell to load PATH from profile
-        proc.currentDirectoryURL = url.deletingLastPathComponent()
+        proc.executableURL = URL(fileURLWithPath: pnpmPath)
+        proc.arguments = ["dev"]
+        proc.currentDirectoryURL = backendDir
+        proc.environment = shellEnv()
 
-        // Ensure node/npm/docker are in PATH
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+
+        // Log backend output asynchronously
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if let str = String(data: data, encoding: .utf8), !str.isEmpty {
+                print("[RelayApp backend] \(str)", terminator: "")
+            }
+        }
+
+        do {
+            try proc.run()
+            print("[RelayApp] Backend started (PID \(proc.processIdentifier))")
+        } catch {
+            print("[RelayApp] Failed to start backend: \(error)")
+        }
+    }
+
+    private static func waitForBackend() async {
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            do {
+                var request = URLRequest(url: URL(string: "http://localhost:3001/health")!)
+                request.timeoutInterval = 2
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                    print("[RelayApp] Backend is ready on http://localhost:3001")
+                    return
+                }
+            } catch {
+                continue
+            }
+        }
+        print("[RelayApp] Backend did not become ready within 30s")
+    }
+
+    private func shellEnv() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         let extraPaths = [
             "/usr/local/bin",
             "/opt/homebrew/bin",
             "\(NSHomeDirectory())/.nvm/versions/node/\(nodeVersion())/bin",
+            "\(NSHomeDirectory())/Library/pnpm",
             "/Applications/Docker.app/Contents/Resources/bin",
         ]
         let currentPath = env["PATH"] ?? "/usr/bin:/bin"
         env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
-        proc.environment = env
+        return env
+    }
 
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = pipe
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            if !output.isEmpty { print("[RelayApp] \(url.lastPathComponent):\n\(output)") }
-            print("[RelayApp] \(url.lastPathComponent) exited with \(proc.terminationStatus)")
-        } catch {
-            print("[RelayApp] Failed to run \(url.lastPathComponent): \(error)")
+    private func findPnpm() -> String {
+        for dir in ["\(NSHomeDirectory())/Library/pnpm", "/opt/homebrew/bin", "/usr/local/bin"] {
+            let path = "\(dir)/pnpm"
+            if FileManager.default.fileExists(atPath: path) { return path }
         }
+        return "/opt/homebrew/bin/pnpm"
     }
 
     /// Find the active nvm node version, or fallback
@@ -68,22 +110,22 @@ struct RelayApp: App {
            let latest = contents.sorted().last {
             return latest
         }
-        return "v22.0.0"  // fallback
+        return "v22.0.0"
     }
 
-    private func findProjectRoot() -> URL? {
-        // Walk up from the app bundle to find the project root containing startup.sh
+    private func findBackendDir() -> URL? {
+        // Walk up from the app bundle to find the project root containing backend/
         var dir = Bundle.main.bundleURL
         for _ in 0..<10 {
             dir = dir.deletingLastPathComponent()
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("startup.sh").path) {
-                return dir
+            let candidate = dir.appendingPathComponent("backend/package.json")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return dir.appendingPathComponent("backend")
             }
         }
-        // Fallback: check common dev path
         let fallback = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Desktop/ramp-intern-hackathon")
-        if FileManager.default.fileExists(atPath: fallback.appendingPathComponent("startup.sh").path) {
+            .appendingPathComponent("Desktop/ramp-intern-hackathon/backend")
+        if FileManager.default.fileExists(atPath: fallback.appendingPathComponent("package.json").path) {
             return fallback
         }
         return nil

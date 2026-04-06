@@ -5,9 +5,26 @@ export type AgentStatus =
   | 'planning'   // container ready, plan agent still talking
   | 'working'    // computer use loop running
   | 'waiting'    // Claude asked for user input
+  | 'paused'     // plan execution paused by user via /stop — resumable
   | 'completed'
   | 'error'
   | 'stopped';
+
+export type PlanStepStatus = 'pending' | 'active' | 'completed' | 'failed';
+
+export interface PlanStep {
+  stepNumber: number;           // 1-indexed
+  shortDescription: string;     // One sentence for UI display
+  detailedInstructions: string; // Full instructions for execution agent
+  suggestedTools: string[];     // e.g. ["bash", "computer", "text_editor"]
+  status: PlanStepStatus;
+}
+
+export interface StructuredPlan {
+  version: number;              // Incremented on each revision
+  mode: 'bash_only' | 'computer_use';
+  steps: PlanStep[];
+}
 
 export interface ActionEvent {
   id: string;
@@ -33,6 +50,7 @@ export interface AgentState {
   messages: AnthropicMessage[];
   recordingProc: ChildProcess | null;
   error: string | null;
+  plan?: StructuredPlan;
 }
 
 export interface AnthropicMessage {

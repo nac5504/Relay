@@ -28,6 +28,8 @@ class BrowserAgent: Identifiable {
     var planComplete: Bool = false
     var outputFiles: [String] = []
     var planSteps: [PlanStep] = []
+    var planRevisionCount: Int = 0
+    var planVersion: Int = 0
 
     // Cursor overlay state — updated from WS "action" events
     var cursorPosition: CGPoint? = nil      // normalized 0…1
@@ -136,9 +138,17 @@ enum AgentStatus: String {
     case error
 }
 
-struct PlanStep: Identifiable {
-    let id: Int // 0-indexed step number
-    let title: String
-    var isCompleted: Bool = false
-    var isActive: Bool = false
+struct PlanStep: Identifiable, Equatable {
+    let id: Int // stepNumber (1-indexed from backend)
+    let shortDescription: String
+    let detailedInstructions: String
+    let suggestedTools: [String]
+    var status: StepStatus = .pending
+
+    enum StepStatus: String {
+        case pending, active, completed, failed
+    }
+
+    var title: String { shortDescription }
+    var isCompleted: Bool { status == .completed }
 }

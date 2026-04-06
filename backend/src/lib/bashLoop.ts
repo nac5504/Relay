@@ -6,18 +6,47 @@ import * as docker from './dockerManager';
 import * as outputManager from './outputManager';
 import * as recordingManager from './recordingManager';
 import { getApiKey } from './config';
+import { StructuredPlan } from './types';
 import * as messageQueue from './messageQueue';
 
 const MODEL = 'claude-sonnet-4-6';
 const MAX_ITERATIONS = 50;
 
-function parsePlanSteps(planText: string): string[] {
-  const steps: string[] = [];
-  for (const line of planText.split('\n')) {
-    const match = line.match(/^\s*(\d+)\.\s+(.+)/);
-    if (match) steps.push(match[2].trim());
+function buildStepsPrompt(plan: StructuredPlan): string {
+  return plan.steps.map(s =>
+    `${s.stepNumber}. ${s.detailedInstructions}\n   Suggested tools: ${s.suggestedTools.join(', ')}`
+  ).join('\n\n');
+}
+
+function handleStepComplete(agentId: string, plan: StructuredPlan, stepNumber: number): string {
+  const stepIdx = plan.steps.findIndex(s => s.stepNumber === stepNumber);
+  if (stepIdx === -1) return `Step ${stepNumber} not found in plan.`;
+
+  plan.steps[stepIdx].status = 'completed';
+
+  const nextStep = plan.steps.find(s => s.status === 'pending');
+  if (nextStep) nextStep.status = 'active';
+
+  registry.update(agentId, { plan });
+  wsHub.broadcast({
+    type: 'step_update',
+    agentId,
+    stepNumber,
+    status: 'completed',
+    timestamp: new Date().toISOString(),
+  });
+
+  if (nextStep) {
+    wsHub.broadcast({
+      type: 'step_update',
+      agentId,
+      stepNumber: nextStep.stepNumber,
+      status: 'active',
+      timestamp: new Date().toISOString(),
+    });
   }
-  return steps;
+
+  return `Step ${stepNumber} marked as completed.${nextStep ? ` Proceeding to step ${nextStep.stepNumber}.` : ' All steps completed.'}`;
 }
 
 /**
@@ -34,7 +63,10 @@ export async function runBashLoop(agentId: string): Promise<void> {
   const client = new Anthropic({ apiKey: getApiKey() });
   let iterations = 0;
 
-  const systemPrompt = `You are an autonomous agent running inside a Linux Docker container. Complete the following task: ${agent.task}
+  const plan = agent.plan;
+  const stepsSection = plan ? `\n\n## Steps\n${buildStepsPrompt(plan)}\n\nAfter completing each step, you MUST call report_step_complete with the step number before proceeding to the next step.` : '';
+
+  const systemPrompt = `You are an autonomous agent running inside a Linux Docker container. Complete the following task: ${agent.task}${stepsSection}
 
 You have access to bash and a text editor. Work efficiently — execute commands, create files, process data.
 
@@ -42,6 +74,52 @@ The home directory is /home/computeruse. When you produce output files, write th
   echo "/path/to/file" >> /tmp/relay_outputs.txt
 
 When done, state "Task completed." and stop.`;
+
+  const tools: Anthropic.Tool[] = [
+    {
+      name: 'bash',
+      description: 'Run a bash command in the container. Returns stdout/stderr.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          command: { type: 'string', description: 'The bash command to run' },
+          restart: { type: 'boolean', description: 'Set to true to restart the bash session' },
+        },
+      },
+    },
+    {
+      name: 'text_editor',
+      description: 'View, create, or edit files.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          command: { type: 'string', enum: ['view', 'create', 'str_replace', 'insert'] },
+          path: { type: 'string', description: 'Absolute file path' },
+          new_file_text: { type: 'string', description: 'Full file content (for create)' },
+          old_str: { type: 'string', description: 'String to replace (for str_replace)' },
+          new_str: { type: 'string', description: 'Replacement string' },
+          insert_line: { type: 'number', description: 'Line number to insert after' },
+        },
+        required: ['command', 'path'],
+      },
+    },
+  ];
+
+  // Add step tracking tool if plan exists
+  if (plan) {
+    tools.push({
+      name: 'report_step_complete',
+      description: 'Report that you have completed a step in the plan. Call this after finishing each step before moving to the next.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          stepNumber: { type: 'number', description: 'The step number (1-indexed) that was completed.' },
+          summary: { type: 'string', description: 'Brief summary of what was done.' },
+        },
+        required: ['stepNumber'],
+      },
+    });
+  }
 
   const messages: Anthropic.MessageParam[] = [
     { role: 'user', content: systemPrompt },
@@ -51,13 +129,17 @@ When done, state "Task completed." and stop.`;
   registry.update(agentId, { status: 'working' });
   wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: 0 });
 
-  // Parse plan steps and broadcast checklist
-  const planSteps = parsePlanSteps(agent.task);
-  if (planSteps.length > 0) {
-    wsHub.broadcast({ type: 'task_list', agentId, steps: planSteps });
-    wsHub.broadcast({ type: 'task_update', agentId, timestampMs: Date.now() - (registry.get(agentId)?.startedAt ?? Date.now()), stepIndex: 0, status: 'active' });
+  // Initialize step tracking from structured plan
+  if (plan && plan.steps.length > 0) {
+    plan.steps[0].status = 'active';
+    registry.update(agentId, { plan });
+    wsHub.broadcast({
+      type: 'plan_update',
+      agentId,
+      plan,
+      timestamp: new Date().toISOString(),
+    });
   }
-  let stepsCompleted = 0;
 
   try {
     while (iterations < MAX_ITERATIONS) {
@@ -66,6 +148,12 @@ When done, state "Task completed." and stop.`;
 
       const currentAgent = registry.get(agentId);
       if (!currentAgent || currentAgent.status === 'stopped') break;
+      if (currentAgent.status === 'paused') {
+        // Paused via /stop — poll until resumed or stopped
+        await new Promise<void>((r) => setTimeout(r, 500));
+        iterations--; // don't count paused iterations against the cap
+        continue;
+      }
 
       // Check for user interrupt messages
       const pendingMsg = messageQueue.consumePending(agentId);
@@ -78,35 +166,7 @@ When done, state "Task completed." and stop.`;
       const response = await client.messages.create({
         model: MODEL,
         max_tokens: 4096,
-        tools: [
-          {
-            name: 'bash',
-            description: 'Run a bash command in the container. Returns stdout/stderr.',
-            input_schema: {
-              type: 'object' as const,
-              properties: {
-                command: { type: 'string', description: 'The bash command to run' },
-                restart: { type: 'boolean', description: 'Set to true to restart the bash session' },
-              },
-            },
-          },
-          {
-            name: 'text_editor',
-            description: 'View, create, or edit files.',
-            input_schema: {
-              type: 'object' as const,
-              properties: {
-                command: { type: 'string', enum: ['view', 'create', 'str_replace', 'insert'] },
-                path: { type: 'string', description: 'Absolute file path' },
-                file_text: { type: 'string', description: 'Full file content (for create)' },
-                old_str: { type: 'string', description: 'String to replace (for str_replace)' },
-                new_str: { type: 'string', description: 'Replacement string' },
-                insert_line: { type: 'number', description: 'Line number to insert after' },
-              },
-              required: ['command', 'path'],
-            },
-          },
-        ],
+        tools,
         messages,
       });
 
@@ -170,26 +230,17 @@ When done, state "Task completed." and stop.`;
 
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'action', text: `${input.command}: ${input.path}`, timestamp: new Date().toISOString() });
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: output });
+
+        } else if (block.name === 'report_step_complete' && plan) {
+          const input = block.input as { stepNumber: number; summary?: string };
+          console.log(`[bash:${agentId.slice(0,8)}] ✅ Step ${input.stepNumber} completed${input.summary ? `: ${input.summary.slice(0, 80)}` : ''}`);
+
+          const resultText = handleStepComplete(agentId, plan, input.stepNumber);
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: resultText });
         }
       }
 
       messages.push({ role: 'user', content: toolResults });
-
-      // Progress plan steps — each successful tool call advances one step
-      if (planSteps.length > 0 && toolResults.length > 0 && stepsCompleted < planSteps.length) {
-        // Check if any tool had an error
-        const hasError = toolResults.some(r => typeof r.content === 'string' && r.content.startsWith('Error:'));
-        if (!hasError) {
-          const ts = Date.now() - (registry.get(agentId)?.startedAt ?? Date.now());
-          wsHub.broadcast({ type: 'task_update', agentId, timestampMs: ts, stepIndex: stepsCompleted, status: 'completed' });
-          recordingManager.logStepEvent(sessionId, { stepIndex: stepsCompleted, status: 'completed', timestampMs: ts, title: planSteps[stepsCompleted] });
-          stepsCompleted++;
-          if (stepsCompleted < planSteps.length) {
-            wsHub.broadcast({ type: 'task_update', agentId, timestampMs: ts, stepIndex: stepsCompleted, status: 'active' });
-            recordingManager.logStepEvent(sessionId, { stepIndex: stepsCompleted, status: 'active', timestampMs: ts, title: planSteps[stepsCompleted] });
-          }
-        }
-      }
 
       const newCost = (registry.get(agentId)?.cost ?? 0) + 0.003;
       registry.update(agentId, { cost: newCost });

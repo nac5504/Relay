@@ -161,10 +161,35 @@ private struct AgentSidebarRow: View {
             .buttonStyle(.plain)
             .foregroundStyle(.white.opacity(0.7))
 
-            // Task title (AI-generated) or fallback to full task
-            let subtitle = agent.taskTitle.isEmpty ? agent.task : agent.taskTitle
-            if !subtitle.isEmpty {
-                Text(subtitle)
+            // Task / active step summary
+            if !agent.planSteps.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    // Plan title (the overall task)
+                    if !agent.task.isEmpty {
+                        Text(agent.task)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .lineLimit(1)
+                    }
+
+                    // Current active step with spinner
+                    if let active = agent.planSteps.first(where: { $0.status == .active }) {
+                        HStack(spacing: 5) {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .scaleEffect(0.7)
+                                .frame(width: 10, height: 10)
+                            Text(active.shortDescription)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .padding(.leading, 42)
+                .padding(.trailing, 10)
+            } else if !agent.task.isEmpty {
+                Text(agent.task)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.3))
                     .lineLimit(2)

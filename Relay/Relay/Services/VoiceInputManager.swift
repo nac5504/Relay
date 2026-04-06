@@ -9,6 +9,7 @@ final class VoiceInputManager {
     var isListening = false
     var isVoiceModeActive = false
     var error: String?
+    var audioLevel: CGFloat = 0.0
 
     private var audioEngine = AVAudioEngine()
     private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -20,11 +21,14 @@ final class VoiceInputManager {
     private var onTranscriptionUpdate: ((String) -> Void)?
     private var onAutoSend: (() -> Void)?
 
-    static let agentNames = ["Atlas", "Nova", "Sage", "Echo", "Pixel", "Bolt", "Onyx", "Flux", "Haze", "Iris"]
+    /// Live agent names from the store, used for speech hints and @-mention conversion.
+    private var agentNames: [String] {
+        AgentStore.shared.agents.map(\.agentName)
+    }
 
     private var silenceTimeout: Double {
         let stored = UserDefaults.standard.double(forKey: "voice_silence_timeout")
-        return stored > 0 ? min(max(stored, 0.5), 3.0) : 1.5
+        return stored > 0 ? min(max(stored, 0.5), 3.0) : 2.0
     }
 
     private init() {}
@@ -34,25 +38,19 @@ final class VoiceInputManager {
     func requestPermissions() async -> Bool {
         guard !permissionsGranted else { return true }
 
+        // Request speech recognition authorization
         let speechStatus = await withCheckedContinuation { cont in
             SFSpeechRecognizer.requestAuthorization { status in
                 cont.resume(returning: status)
             }
         }
         guard speechStatus == .authorized else {
-            error = "Speech recognition not authorized"
+            error = "Speech recognition not authorized. Enable it in System Settings > Privacy & Security > Speech Recognition."
             return false
         }
 
-        let audioStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-        if audioStatus != .authorized {
-            let granted = await AVCaptureDevice.requestAccess(for: .audio)
-            guard granted else {
-                error = "Microphone access not authorized"
-                return false
-            }
-        }
-
+        // Microphone access is handled implicitly when AVAudioEngine starts.
+        // Non-sandboxed apps don't need AVCaptureDevice permission checks.
         permissionsGranted = true
         return true
     }
@@ -62,22 +60,41 @@ final class VoiceInputManager {
     func startListening(onUpdate: @escaping (String) -> Void, onSend: @escaping () -> Void) {
         guard !isListening else { return }
 
+        guard let speechRecognizer, speechRecognizer.isAvailable else {
+            error = "Speech recognition unavailable. Check that Siri & Dictation is enabled in System Settings."
+            return
+        }
+
         onTranscriptionUpdate = onUpdate
         onAutoSend = onSend
         error = nil
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
         // Hint agent names so the recognizer prioritizes them
-        request.contextualStrings = Self.agentNames + Self.agentNames.map { "Hey \($0)" }
+        request.contextualStrings = agentNames + agentNames.map { "Hey \($0)" }
         recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             request.append(buffer)
+
+            // Compute RMS audio level for waveform visualization
+            guard let channelData = buffer.floatChannelData?[0] else { return }
+            let frameLength = Int(buffer.frameLength)
+            var sum: Float = 0.0
+            for i in 0..<frameLength {
+                let sample = channelData[i]
+                sum += sample * sample
+            }
+            let rms = sqrt(sum / Float(frameLength))
+            let level = min(CGFloat(rms * 5.0), 1.0)
+
+            Task { @MainActor [weak self] in
+                self?.audioLevel = level
+            }
         }
 
         audioEngine.prepare()
@@ -89,7 +106,7 @@ final class VoiceInputManager {
             return
         }
 
-        recognitionTask = speechRecognizer?.recognitionTask(with: request) { [weak self] result, error in
+        recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor in
                 guard let self else { return }
 
@@ -104,9 +121,11 @@ final class VoiceInputManager {
                     }
                 }
 
-                if let error, !self.isListening {
-                    // Only surface errors if we're not intentionally stopping
-                    _ = error // suppress unused warning
+                if let error {
+                    self.error = error.localizedDescription
+                    if self.isListening {
+                        self.stopListening()
+                    }
                 }
             }
         }
@@ -132,7 +151,7 @@ final class VoiceInputManager {
         // "Hey AgentName ..." → "@AgentName ..."
         if lower.hasPrefix("hey ") {
             let afterHey = String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespaces)
-            for name in Self.agentNames {
+            for name in agentNames {
                 if afterHey.lowercased().hasPrefix(name.lowercased()) {
                     let rest = String(afterHey.dropFirst(name.count)).trimmingCharacters(in: .whitespaces)
                     let cleaned = rest.hasPrefix(",") ? String(rest.dropFirst()).trimmingCharacters(in: .whitespaces) : rest
@@ -142,7 +161,7 @@ final class VoiceInputManager {
         }
 
         // Bare "AgentName ..." → "@AgentName ..."
-        for name in Self.agentNames {
+        for name in agentNames {
             if lower.hasPrefix(name.lowercased()),
                (trimmed.count == name.count || trimmed[trimmed.index(trimmed.startIndex, offsetBy: name.count)] == " ") {
                 let rest = String(trimmed.dropFirst(name.count)).trimmingCharacters(in: .whitespaces)
@@ -180,5 +199,6 @@ final class VoiceInputManager {
         recognitionRequest = nil
         recognitionTask?.cancel()
         recognitionTask = nil
+        audioLevel = 0.0
     }
 }

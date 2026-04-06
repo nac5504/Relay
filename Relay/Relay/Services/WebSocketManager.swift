@@ -112,9 +112,41 @@ final class WebSocketManager: @unchecked Sendable {
                 let streaming = json["streaming"] as? Bool ?? false
                 store.appendPlanMessage(agentId: agentId, role: role, text: msgText, streaming: streaming)
 
-            case "plan_complete":
+            case "plan_update":
+                guard let agentId = json["agentId"] as? String,
+                      let planJSON = json["plan"] as? [String: Any],
+                      let version = planJSON["version"] as? Int,
+                      let stepsJSON = planJSON["steps"] as? [[String: Any]] else { return }
+                let steps = stepsJSON.compactMap { stepJSON -> PlanStep? in
+                    guard let num = stepJSON["stepNumber"] as? Int,
+                          let short = stepJSON["shortDescription"] as? String,
+                          let detailed = stepJSON["detailedInstructions"] as? String,
+                          let tools = stepJSON["suggestedTools"] as? [String],
+                          let statusStr = stepJSON["status"] as? String else { return nil }
+                    return PlanStep(
+                        id: num,
+                        shortDescription: short,
+                        detailedInstructions: detailed,
+                        suggestedTools: tools,
+                        status: PlanStep.StepStatus(rawValue: statusStr) ?? .pending
+                    )
+                }
+                store.handlePlanUpdate(agentId: agentId, steps: steps, version: version)
+
+            case "plan_approved":
                 guard let agentId = json["agentId"] as? String else { return }
                 store.updateAgent(id: agentId) { $0.planComplete = true }
+
+            case "step_update":
+                guard let agentId = json["agentId"] as? String,
+                      let stepNumber = json["stepNumber"] as? Int,
+                      let statusStr = json["status"] as? String else { return }
+                store.updateAgent(id: agentId) { agent in
+                    let newStatus = PlanStep.StepStatus(rawValue: statusStr) ?? .pending
+                    if let idx = agent.planSteps.firstIndex(where: { $0.id == stepNumber }) {
+                        agent.planSteps[idx].status = newStatus
+                    }
+                }
 
             case "chat_message":
                 guard let agentId = json["agentId"] as? String,
@@ -154,31 +186,7 @@ final class WebSocketManager: @unchecked Sendable {
                     store.removeAgent(id: agentId)
                 }
 
-            case "task_list":
-                guard let agentId = json["agentId"] as? String,
-                      let steps = json["steps"] as? [String] else { return }
-                store.updateAgent(id: agentId) { agent in
-                    agent.planSteps = steps.enumerated().map { PlanStep(id: $0.offset, title: $0.element) }
-                }
-
-            case "task_update":
-                guard let agentId = json["agentId"] as? String,
-                      let stepIndex = json["stepIndex"] as? Int else { return }
-                let status = json["status"] as? String ?? "completed"
-                store.updateAgent(id: agentId) { agent in
-                    if stepIndex < agent.planSteps.count {
-                        if status == "completed" {
-                            agent.planSteps[stepIndex].isCompleted = true
-                            agent.planSteps[stepIndex].isActive = false
-                        } else if status == "active" {
-                            // Clear previous active
-                            for i in 0..<agent.planSteps.count {
-                                agent.planSteps[i].isActive = false
-                            }
-                            agent.planSteps[stepIndex].isActive = true
-                        }
-                    }
-                }
+            // task_list and task_update replaced by plan_update and step_update
 
             case "files_ready":
                 guard let agentId = json["agentId"] as? String,

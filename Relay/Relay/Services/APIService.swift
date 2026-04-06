@@ -90,6 +90,14 @@ final class APIService: Sendable {
         _ = try await request("/agents/\(id.lowercased())", method: "DELETE")
     }
 
+    func pauseAgent(id: String) async throws {
+        _ = try await request("/agents/\(id.lowercased())/pause", method: "POST")
+    }
+
+    func resumeAgent(id: String) async throws {
+        _ = try await request("/agents/\(id.lowercased())/resume", method: "POST")
+    }
+
     func sendMessage(agentId: String, text: String) async throws {
         struct Body: Encodable { let text: String }
         _ = try await request("/agents/\(agentId.lowercased())/message", method: "POST", body: Body(text: text))

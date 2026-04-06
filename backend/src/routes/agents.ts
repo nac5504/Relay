@@ -9,7 +9,7 @@ import * as messageQueue from '../lib/messageQueue';
 import * as recordingManager from '../lib/recordingManager';
 import * as wsHub from '../lib/wsHub';
 import * as warmPool from '../lib/warmPool';
-import { AgentState } from '../lib/types';
+import { AgentState, StructuredPlan } from '../lib/types';
 import { getApiKey, hasApiKey } from '../lib/config';
 import * as chromeSync from '../lib/chromeProfileSync';
 
@@ -55,7 +55,7 @@ router.post('/', async (req: Request, res: Response) => {
 
   const { task, agentName, chromeProfile: reqProfile } = req.body as { task?: string; agentName?: string; chromeProfile?: string };
   const chromeProfile = reqProfile ?? 'Profile 1'; // default to usc.edu profile
-  if (!task) return res.status(400).json({ error: '"task" is required' });
+  const resolvedTask = task ?? '';
 
   const agentId = uuidv4();
   const sessionId = uuidv4();
@@ -64,7 +64,7 @@ router.post('/', async (req: Request, res: Response) => {
   const agent = registry.create(agentId, {
     id: agentId,
     agentName: name,
-    task: task ?? '',
+    task: resolvedTask,
     status: 'starting',
     containerName: null,
     noVNCPort: null,
@@ -79,7 +79,7 @@ router.post('/', async (req: Request, res: Response) => {
     error: null,
   });
 
-  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${(task ?? '').slice(0, 60) || '(awaiting)'}"`);
+  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${resolvedTask.slice(0, 60) || '(awaiting)'}"`);
   wsHub.broadcast({ type: 'agent_added', agent: summarize(agent) });
   res.status(201).json(summarize(agent));
 
@@ -118,16 +118,16 @@ router.post('/', async (req: Request, res: Response) => {
 
     // 2. Start plan agent (works for both warm and cold paths)
     console.log(`[agents] Starting plan agent for ${agentId}`);
-    planAgent.runPlanAgent(agentId, async (_finalPlan: string, mode: 'bash_only' | 'computer_use') => {
-      console.log(`[agents] Plan complete for ${agentId} (mode: ${mode}) — waiting for container`);
+    planAgent.runPlanAgent(agentId, async (plan: StructuredPlan) => {
+      console.log(`[agents] Plan complete for ${agentId} (mode: ${plan.mode}, ${plan.steps.length} steps) — waiting for container`);
       await waitForContainerReady(agentId);
       const current = registry.get(agentId);
       if (!current || current.status === 'stopped') return;
-      console.log(`[agents] Starting ${mode} loop for ${agentId}`);
+      console.log(`[agents] Starting ${plan.mode} loop for ${agentId}`);
       registry.update(agentId, { status: 'working' });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: 0 });
 
-      const loopFn = mode === 'bash_only' ? bashLoop.runBashLoop : claudeLoop.runAgentLoop;
+      const loopFn = plan.mode === 'bash_only' ? bashLoop.runBashLoop : claudeLoop.runAgentLoop;
       loopFn(agentId).catch((err) => {
         console.error(`[agents] Loop error for ${agentId}:`, err);
       });
@@ -189,6 +189,36 @@ async function waitForContainerReady(agentId: string, timeoutMs = 120_000): Prom
   console.warn(`[agents] Container for ${agentId} not ready after ${timeoutMs}ms — proceeding anyway`);
 }
 
+// POST /agents/:id/pause — pause plan execution (loop stops iterating but container stays alive)
+router.post('/:id/pause', (req: Request, res: Response) => {
+  const agent = registry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Not found' });
+
+  if (agent.status !== 'working' && agent.status !== 'waiting') {
+    return res.status(400).json({ error: `Cannot pause agent in status "${agent.status}"` });
+  }
+
+  console.log(`[agents] Pausing ${req.params.id} (was: ${agent.status})`);
+  registry.update(req.params.id, { status: 'paused' });
+  wsHub.broadcast({ type: 'agent_update', agentId: req.params.id, status: 'paused', cost: agent.cost });
+  res.status(204).send();
+});
+
+// POST /agents/:id/resume — resume a paused agent
+router.post('/:id/resume', (req: Request, res: Response) => {
+  const agent = registry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Not found' });
+
+  if (agent.status !== 'paused') {
+    return res.status(400).json({ error: `Agent is not paused (status: ${agent.status})` });
+  }
+
+  console.log(`[agents] Resuming ${req.params.id}`);
+  registry.update(req.params.id, { status: 'working' });
+  wsHub.broadcast({ type: 'agent_update', agentId: req.params.id, status: 'working', cost: agent.cost });
+  res.status(204).send();
+});
+
 // DELETE /agents/:id
 router.delete('/:id', async (req: Request, res: Response) => {
   const agent = registry.get(req.params.id);
@@ -229,7 +259,7 @@ router.post('/:id/message', (req: Request, res: Response) => {
   } else {
     // Route to computer use agent
     messageQueue.setPending(req.params.id, text);
-    if (agent.status === 'waiting') {
+    if (agent.status === 'waiting' || agent.status === 'paused') {
       registry.update(req.params.id, { status: 'working', waitingForInput: false });
       wsHub.broadcast({ type: 'agent_update', agentId: req.params.id, status: 'working', cost: agent.cost });
     }

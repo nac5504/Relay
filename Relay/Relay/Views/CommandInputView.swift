@@ -147,6 +147,7 @@ struct CommandInputView: View {
     @State private var keyMonitor: Any?
     @State private var attachedImages: [NSImage] = []
     @State private var isFocused = false
+    @State private var showVoicePermissionAlert = false
     @AppStorage("voice_enabled") private var voiceEnabled = true
     private let voiceManager = VoiceInputManager.shared
 
@@ -233,14 +234,26 @@ struct CommandInputView: View {
                     HStack(spacing: 8) {
                         Circle()
                             .fill(.red)
-                            .frame(width: 8, height: 8)
+                            .frame(width: 6, height: 6)
+                            .shadow(color: .red.opacity(0.6), radius: 4)
                         Text("Listening — auto-sends on pause")
                             .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.5))
                         Spacer()
                     }
                     .padding(.horizontal, 14)
-                    .padding(.top, 8)
+                    .padding(.vertical, 6)
+                    .background(Color.red.opacity(0.05))
+                    .overlay(
+                        Rectangle()
+                            .fill(LinearGradient(
+                                colors: [.red.opacity(0.0), .red.opacity(0.3 * voiceManager.audioLevel + 0.1), .red.opacity(0.0)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ))
+                            .frame(height: 1),
+                        alignment: .bottom
+                    )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
@@ -274,13 +287,11 @@ struct CommandInputView: View {
                     .buttonStyle(.plain)
 
                     if voiceEnabled {
-                        Button { toggleVoice() } label: {
-                            Image(systemName: voiceManager.isListening ? "mic.fill" : "mic")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(voiceManager.isListening ? .red : .white.opacity(0.4))
-                                .symbolEffect(.pulse, isActive: voiceManager.isListening)
-                        }
-                        .buttonStyle(.plain)
+                        VoiceWaveformButton(
+                            isListening: voiceManager.isListening,
+                            audioLevel: voiceManager.audioLevel,
+                            action: { toggleVoice() }
+                        )
                     }
 
                     Spacer()
@@ -309,6 +320,16 @@ struct CommandInputView: View {
         }
         .onAppear { installKeyMonitor() }
         .onDisappear { removeKeyMonitor() }
+        .alert("Microphone & Speech Access", isPresented: $showVoicePermissionAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(voiceManager.error ?? "Relay needs microphone and speech recognition access. Please enable them in System Settings > Privacy & Security.")
+        }
     }
 
     // MARK: - Key Monitor
@@ -393,7 +414,10 @@ struct CommandInputView: View {
             voiceManager.stopListening()
         } else {
             Task {
-                guard await voiceManager.requestPermissions() else { return }
+                guard await voiceManager.requestPermissions() else {
+                    showVoicePermissionAlert = true
+                    return
+                }
                 voiceManager.startListening(
                     onUpdate: { processed in
                         self.text = processed
