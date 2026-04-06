@@ -9,7 +9,7 @@ import * as messageQueue from '../lib/messageQueue';
 import * as recordingManager from '../lib/recordingManager';
 import * as wsHub from '../lib/wsHub';
 import * as warmPool from '../lib/warmPool';
-import { AgentState } from '../lib/types';
+import { AgentState, StructuredPlan } from '../lib/types';
 import { getApiKey, hasApiKey } from '../lib/config';
 import * as chromeSync from '../lib/chromeProfileSync';
 
@@ -55,7 +55,7 @@ router.post('/', async (req: Request, res: Response) => {
 
   const { task, agentName, chromeProfile: reqProfile } = req.body as { task?: string; agentName?: string; chromeProfile?: string };
   const chromeProfile = reqProfile ?? 'Profile 1'; // default to usc.edu profile
-  if (!task) return res.status(400).json({ error: '"task" is required' });
+  const resolvedTask = task ?? '';
 
   const agentId = uuidv4();
   const sessionId = uuidv4();
@@ -64,7 +64,7 @@ router.post('/', async (req: Request, res: Response) => {
   const agent = registry.create(agentId, {
     id: agentId,
     agentName: name,
-    task: task ?? '',
+    task: resolvedTask,
     status: 'starting',
     containerName: null,
     noVNCPort: null,
@@ -79,7 +79,7 @@ router.post('/', async (req: Request, res: Response) => {
     error: null,
   });
 
-  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${(task ?? '').slice(0, 60) || '(awaiting)'}"`);
+  console.log(`[agents] Created agent ${agentId} (${name}) — task: "${resolvedTask.slice(0, 60) || '(awaiting)'}"`);
   wsHub.broadcast({ type: 'agent_added', agent: summarize(agent) });
   res.status(201).json(summarize(agent));
 
@@ -108,16 +108,16 @@ router.post('/', async (req: Request, res: Response) => {
 
     // 2. Start plan agent (works for both warm and cold paths)
     console.log(`[agents] Starting plan agent for ${agentId}`);
-    planAgent.runPlanAgent(agentId, async (_finalPlan: string, mode: 'bash_only' | 'computer_use') => {
-      console.log(`[agents] Plan complete for ${agentId} (mode: ${mode}) — waiting for container`);
+    planAgent.runPlanAgent(agentId, async (plan: StructuredPlan) => {
+      console.log(`[agents] Plan complete for ${agentId} (mode: ${plan.mode}, ${plan.steps.length} steps) — waiting for container`);
       await waitForContainerReady(agentId);
       const current = registry.get(agentId);
       if (!current || current.status === 'stopped') return;
-      console.log(`[agents] Starting ${mode} loop for ${agentId}`);
+      console.log(`[agents] Starting ${plan.mode} loop for ${agentId}`);
       registry.update(agentId, { status: 'working' });
       wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: 0 });
 
-      const loopFn = mode === 'bash_only' ? bashLoop.runBashLoop : claudeLoop.runAgentLoop;
+      const loopFn = plan.mode === 'bash_only' ? bashLoop.runBashLoop : claudeLoop.runAgentLoop;
       loopFn(agentId).catch((err) => {
         console.error(`[agents] Loop error for ${agentId}:`, err);
       });

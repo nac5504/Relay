@@ -5,6 +5,9 @@ struct ChatPanelView: View {
     let store: AgentStore
     var onClose: () -> Void
     @State private var inputText = ""
+    @State private var showVoicePermissionAlert = false
+    @AppStorage("voice_enabled") private var voiceEnabled = true
+    private let voiceManager = VoiceInputManager.shared
 
     private var isPlanningPhase: Bool {
         agent.relayStatus.isPlanningPhase
@@ -17,6 +20,11 @@ struct ChatPanelView: View {
     private var isThinking: Bool {
         agent.relayStatus == .working
             && messages.last?.role != .user
+    }
+
+    /// Show approve/modify buttons on the current plan during planning
+    private var showPlanActions: Bool {
+        isPlanningPhase && !agent.planComplete && !agent.planSteps.isEmpty
     }
 
     var body: some View {
@@ -78,25 +86,52 @@ struct ChatPanelView: View {
                 .background(Color.orange.opacity(0.08))
             }
 
-            // Messages with timeline
+            // Messages with timeline — plans rendered inline at their position
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        // Task checklist
-                        if !agent.planSteps.isEmpty {
-                            PlanChecklist(steps: agent.planSteps)
-                                .padding(.bottom, 8)
-                        }
-
                         ForEach(Array(messages.enumerated()), id: \.element.id) { i, msg in
-                            let isLast = i == messages.count - 1 && !isThinking
-                            let status = actionStatus(at: i, in: messages)
-                            TimelineRow(
-                                message: msg,
-                                status: status,
-                                showLine: !isLast
-                            )
-                            .id(msg.id)
+                            // Skip output messages that were merged into a preceding bash card
+                            if msg.role == .output && i > 0 && messages[i - 1].role == .action && messages[i - 1].actionKind == .bash {
+                                EmptyView()
+                            } else if msg.role == .assistant && msg.text.contains("<plan/>") {
+                                // Assistant message with embedded plan — split on marker
+                                let parts = msg.text.components(separatedBy: "<plan/>")
+                                let snapshot = agent.planSnapshots[msg.id]
+                                let isCurrentPlan = msg.id == agent.currentPlanMessageId
+                                VStack(alignment: .leading, spacing: 8) {
+                                    if let before = parts.first, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        MarkdownTextView(text: before.trimmingCharacters(in: .whitespacesAndNewlines))
+                                    }
+                                    if isCurrentPlan {
+                                        PlanChecklist(
+                                            steps: snapshot?.steps ?? agent.planSteps,
+                                            version: snapshot?.version ?? agent.planVersion
+                                        )
+                                    } else {
+                                        PlanRevisedIndicator()
+                                    }
+                                    if parts.count > 1 {
+                                        let after = parts.dropFirst().joined(separator: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                                        if !after.isEmpty {
+                                            MarkdownTextView(text: after)
+                                        }
+                                    }
+                                }
+                                .padding(.bottom, 14)
+                                .id(msg.id)
+                            } else {
+                                let isLast = i == messages.count - 1 && !isThinking
+                                let status = actionStatus(at: i, in: messages)
+                                let bashOutput: String? = (msg.role == .action && msg.actionKind == .bash && i + 1 < messages.count && messages[i + 1].role == .output) ? messages[i + 1].text : nil
+                                TimelineRow(
+                                    message: msg,
+                                    status: status,
+                                    showLine: !isLast,
+                                    outputText: bashOutput
+                                )
+                                .id(msg.id)
+                            }
                         }
 
                         // Thinking indicator as timeline row
@@ -187,8 +222,58 @@ struct ChatPanelView: View {
                 .fill(Color.white.opacity(0.06))
                 .frame(height: 1)
 
+            // Approve plan banner
+            if showPlanActions {
+                Button(action: approvePlan) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                        Text("Approve Plan v\(agent.planVersion)")
+                            .font(.system(.caption, design: .monospaced, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                        Spacer()
+                        Image(systemName: "return")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.3))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.06))
+                }
+                .buttonStyle(.plain)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            // Listening indicator
+            if voiceManager.isListening {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 5, height: 5)
+                        .shadow(color: .red.opacity(0.6), radius: 3)
+                    Text("Listening...")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color.red.opacity(0.04))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             // Input bar
             HStack(spacing: 8) {
+                if voiceEnabled {
+                    VoiceWaveformButton(
+                        isListening: voiceManager.isListening,
+                        audioLevel: voiceManager.audioLevel,
+                        action: { toggleVoice() },
+                        compact: true
+                    )
+                }
+
                 TextField(
                     isPlanningPhase ? "Refine the plan..." : "Send a message...",
                     text: $inputText
@@ -199,6 +284,10 @@ struct ChatPanelView: View {
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.white.opacity(0.04))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(voiceManager.isListening ? Color.red.opacity(0.25) : Color.clear, lineWidth: 1)
+                        )
                 )
                 .foregroundStyle(.white)
                 .onSubmit { sendMessage() }
@@ -224,6 +313,16 @@ struct ChatPanelView: View {
                 .frame(width: 1),
             alignment: .leading
         )
+        .alert("Microphone & Speech Access", isPresented: $showVoicePermissionAlert) {
+            Button("Open Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(voiceManager.error ?? "Relay needs microphone and speech recognition access. Please enable them in System Settings > Privacy & Security.")
+        }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
@@ -240,347 +339,27 @@ struct ChatPanelView: View {
         inputText = ""
         Task { try? await store.sendMessage(to: agent, text: text) }
     }
-}
 
-// MARK: - Timeline Row
-
-private struct TimelineRow: View {
-    let message: ChatMessage
-    let status: ActionStatus
-    let showLine: Bool
-
-    private var dotColor: Color {
-        if message.isError { return .red }
-        if message.role == .action || message.role == .output { return status.dotColor }
-        if message.role == .user { return .accentColor.opacity(0.6) }
-        return .white.opacity(0.15)
+    private func approvePlan() {
+        Task { try? await store.sendMessage(to: agent, text: "go") }
     }
 
-    private var dotSize: CGFloat {
-        message.role == .action ? 8 : 6
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            // Timeline column
-            VStack(spacing: 0) {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: dotSize, height: dotSize)
-                    .padding(.top, message.role == .action ? 5 : 6)
-
-                if showLine {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.08))
-                        .frame(width: 1)
-                        .frame(maxHeight: .infinity)
-                }
-            }
-            .frame(width: 10)
-
-            // Content
-            messageContent
-                .padding(.bottom, 6)
-        }
-    }
-
-    @ViewBuilder
-    private var messageContent: some View {
-        switch message.role {
-        case .user:
-            HStack {
-                Spacer(minLength: 20)
-                Text(message.text)
-                    .font(.system(.callout))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.8)))
-                    .foregroundStyle(.white)
-            }
-
-        case .output:
-            OutputBlock(text: message.text)
-
-        case .assistant:
-            Text(coloredText(message.text))
-                .font(.system(.callout))
-                .foregroundStyle(.white.opacity(0.85))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-        case .action:
-            ActionCard(message: message, status: status)
-
-        case .thinking:
-            ThinkingContent(message: message)
-
-        case .system:
-            ErrorOrSystemContent(message: message)
-        }
-    }
-}
-
-// MARK: - Action Card
-
-private struct ActionCard: View {
-    let message: ChatMessage
-    let status: ActionStatus
-
-    private var borderColor: Color {
-        switch status {
-        case .success: return .green.opacity(0.3)
-        case .failure: return .red.opacity(0.3)
-        case .pending: return .white.opacity(0.08)
-        case .neutral: return .white.opacity(0.08)
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: message.actionKind.iconName)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(message.actionKind.tintColor.opacity(0.7))
-                .frame(width: 16, height: 16)
-
-            Text(message.actionDisplayText)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-                .lineLimit(2)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(0.03))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(borderColor, lineWidth: 1)
-        )
-    }
-}
-
-// MARK: - Thinking Content (collapsible)
-
-private struct ThinkingContent: View {
-    let message: ChatMessage
-    @State private var isExpanded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                    Text("Thinking...")
-                        .font(.system(.caption2, design: .monospaced))
-                }
-                .foregroundStyle(.white.opacity(0.25))
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                Text(message.text)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.2))
-                    .padding(.leading, 14)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - Error / System Content
-
-private struct ErrorOrSystemContent: View {
-    let message: ChatMessage
-
-    var body: some View {
-        if message.isError {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                Text(message.text)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.red.opacity(0.8))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.red.opacity(0.08))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.red.opacity(0.2), lineWidth: 1)
-            )
+    private func toggleVoice() {
+        if voiceManager.isListening {
+            voiceManager.stopListening()
         } else {
-            HStack(spacing: 6) {
-                Image(systemName: "info.circle")
-                    .font(.caption2)
-                    .foregroundStyle(.cyan.opacity(0.5))
-                Text(message.text)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-// MARK: - Thinking Timeline Row (at bottom of list)
-
-private struct ThinkingTimelineRow: View {
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            // Pulsing dot
-            VStack(spacing: 0) {
-                PulsingDot()
-                    .padding(.top, 6)
-            }
-            .frame(width: 10)
-
-            HStack(spacing: 6) {
-                PanelThinkingDots()
-            }
-            .padding(.top, 2)
-        }
-    }
-}
-
-// MARK: - Pulsing Dot
-
-private struct PulsingDot: View {
-    @State private var isPulsing = false
-
-    var body: some View {
-        Circle()
-            .fill(Color.cyan.opacity(isPulsing ? 0.6 : 0.2))
-            .frame(width: 6, height: 6)
-            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isPulsing)
-            .onAppear { isPulsing = true }
-    }
-}
-
-// MARK: - Panel Thinking Dots
-
-private struct PanelThinkingDots: View {
-    @State private var phase = 0
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<3, id: \.self) { i in
-                Circle()
-                    .fill(Color.cyan.opacity(phase == i ? 0.8 : 0.25))
-                    .frame(width: 4, height: 4)
-                    .animation(.easeInOut(duration: 0.4), value: phase)
-            }
-        }
-        .onAppear {
-            Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
-                phase = (phase + 1) % 3
-            }
-        }
-    }
-}
-
-// MARK: - Output Block (collapsible bash output)
-
-private struct OutputBlock: View {
-    let text: String
-    @State private var isExpanded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8, weight: .bold))
-                    Text("Output")
-                        .font(.system(.caption2, design: .monospaced))
-                    Text("(\(text.components(separatedBy: "\n").count) lines)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.2))
+            Task {
+                guard await voiceManager.requestPermissions() else {
+                    showVoicePermissionAlert = true
+                    return
                 }
-                .foregroundStyle(.white.opacity(0.35))
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(text)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .textSelection(.enabled)
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.black.opacity(0.3))
+                voiceManager.startListening(
+                    onUpdate: { processed in self.inputText = processed },
+                    onSend: { self.sendMessage() }
                 )
-                .padding(.top, 4)
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-// MARK: - Plan Checklist
-
-struct PlanChecklist: View {
-    let steps: [PlanStep]
-
-    private var completedCount: Int {
-        steps.filter(\.isCompleted).count
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "checklist")
-                    .font(.caption)
-                    .foregroundStyle(.cyan)
-                Text("Plan")
-                    .font(.system(.caption, design: .monospaced, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.5))
-                Spacer()
-                Text("\(completedCount)/\(steps.count)")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
-            }
-
-            ForEach(steps) { step in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: step.isCompleted ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 13))
-                        .foregroundStyle(step.isCompleted ? .green : .white.opacity(0.2))
-
-                    Text(step.title)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(step.isCompleted ? .white.opacity(0.3) : .white.opacity(0.6))
-                        .strikethrough(step.isCompleted, color: .white.opacity(0.15))
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.03))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-        )
-    }
-}
+// Timeline components extracted to TimelineRowView.swift

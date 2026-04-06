@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getApiKey } from './config';
 import * as registry from './agentRegistry';
 import * as wsHub from './wsHub';
+import { StructuredPlan, PlanStep } from './types';
 
 const MODEL = 'claude-haiku-4-5';
 
@@ -42,14 +43,18 @@ const PLAN_AGENT_SYSTEM = `You are a planning assistant helping a user define a 
 ${ENVIRONMENT_CONTEXT}
 
 Your job:
-1. Understand what the user wants
-2. Ask 1-2 clarifying questions ONLY if genuinely ambiguous
-3. Propose a concise plan
-4. When the user confirms ("go", "yes", "do it", etc.), call begin_implementation with:
-   - finalPlan: the step-by-step task
-   - mode: "bash_only" if the task can be done entirely via command line (file creation, text processing, code execution, API calls via curl) or "computer_use" if it requires GUI interaction (browsing websites, using LibreOffice GUI, clicking through apps)
+1. ALWAYS start by asking 2-4 clarifying questions to understand the user's intent, preferences, and constraints. Do NOT propose a plan on your first response. Just ask questions as plain text.
+2. After the user answers your questions, call update_plan with a structured plan. Each step should have a concise one-sentence shortDescription (shown in the UI) and detailed instructions for the execution agent.
+3. After calling update_plan, briefly summarize what the plan does and ask the user if they'd like to proceed or make changes.
+4. If the user gives feedback, revise the plan by calling update_plan again.
+5. When the user confirms ("go", "yes", "do it", "looks good", "proceed", etc.), call begin_implementation.
 
-IMPORTANT: Prefer "bash_only" mode whenever possible — it's 10x faster and cheaper. Only use "computer_use" when the task genuinely requires seeing/interacting with a GUI (e.g., navigating a website, filling forms, using a visual app).
+IMPORTANT RULES:
+- Your FIRST response must ALWAYS be clarifying questions — never a plan. Even if the task seems clear, ask about preferences, scope, or details.
+- When asking questions, ONLY respond with text. Do NOT call update_plan.
+- Keep your responses short and conversational. Do NOT use markdown formatting like bold, headers, nested lists, or bullet points. Just write plain sentences. Number your questions simply like "1. question here" with no sub-items.
+- Only call update_plan when you are proposing or revising the actual plan (after the user has answered your questions).
+- Prefer "bash_only" mode whenever possible — it's 10x faster and cheaper. Only use "computer_use" when the task genuinely requires seeing/interacting with a GUI.
 
 Examples of bash_only tasks: write a file, run a script, process data, create documents via CLI, make API calls
 Examples of computer_use tasks: browse a website, fill out a form, use LibreOffice GUI, take screenshots of web pages`;
@@ -67,19 +72,64 @@ export function cancelPlanAgent(agentId: string): void {
   pendingMessages.delete(agentId);
 }
 
+const UPDATE_PLAN_TOOL: Anthropic.Tool = {
+  name: 'update_plan',
+  description: 'Propose or revise the structured plan. Call this when you have enough information to present a plan. Do NOT call this when asking the user questions — just respond with text instead.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      mode: {
+        type: 'string',
+        enum: ['bash_only', 'computer_use'],
+        description: 'bash_only for CLI-only tasks (faster/cheaper), computer_use for GUI tasks.',
+      },
+      steps: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            stepNumber: { type: 'number', description: 'Step number, 1-indexed.' },
+            shortDescription: { type: 'string', description: 'One sentence shown in the UI checklist.' },
+            detailedInstructions: { type: 'string', description: 'Full instructions for the execution agent.' },
+            suggestedTools: {
+              type: 'array',
+              items: { type: 'string', enum: ['bash', 'computer', 'text_editor'] },
+              description: 'Tools likely needed for this step.',
+            },
+          },
+          required: ['stepNumber', 'shortDescription', 'detailedInstructions', 'suggestedTools'],
+        },
+        description: 'Ordered list of plan steps.',
+      },
+    },
+    required: ['mode', 'steps'],
+  },
+};
+
+const BEGIN_IMPLEMENTATION_TOOL: Anthropic.Tool = {
+  name: 'begin_implementation',
+  description: 'Call this ONLY after the user explicitly confirms they want to proceed with the current plan (e.g. "go", "yes", "do it", "looks good").',
+  input_schema: {
+    type: 'object' as const,
+    properties: {},
+    required: [],
+  },
+};
+
 export async function runPlanAgent(
   agentId: string,
-  onBeginImplementation: (finalPlan: string, mode: 'bash_only' | 'computer_use') => Promise<void>,
+  onBeginImplementation: (plan: StructuredPlan) => Promise<void>,
 ): Promise<void> {
   const agent = registry.get(agentId);
   if (!agent) return;
 
   const client = new Anthropic({ apiKey: getApiKey() });
-
   const messages: Anthropic.MessageParam[] = [];
 
+  let currentPlan: StructuredPlan | null = null;
+  let planVersion = 0;
+
   if (agent.task) {
-    // Task provided up front — send it as the first user message
     messages.push({ role: 'user', content: agent.task });
     wsHub.broadcast({
       type: 'plan_message',
@@ -89,7 +139,6 @@ export async function runPlanAgent(
       timestamp: new Date().toISOString(),
     });
   } else {
-    // No task yet — greet and wait for the user's first message
     const greeting = "What would you like me to work on?";
     wsHub.broadcast({
       type: 'plan_message',
@@ -127,37 +176,18 @@ export async function runPlanAgent(
     // Stream plan agent response
     console.log(`[planAgent] Calling Claude for ${agentId} (${messages.length} messages)`);
     let fullText = '';
-    let toolName = '';
-    let toolInputJson = '';
-    let toolUseId = '';
+    const toolCalls: { name: string; id: string; inputJson: string }[] = [];
+    let currentToolName = '';
+    let currentToolId = '';
+    let currentToolJson = '';
     let inToolUse = false;
 
     try {
       const stream = client.messages.stream({
         model: MODEL,
-        max_tokens: 1024,
+        max_tokens: 2048,
         system: PLAN_AGENT_SYSTEM,
-        tools: [
-          {
-            name: 'begin_implementation',
-            description: 'Call this when the user confirms they want to proceed.',
-            input_schema: {
-              type: 'object' as const,
-              properties: {
-                finalPlan: {
-                  type: 'string',
-                  description: 'The complete, step-by-step task description.',
-                },
-                mode: {
-                  type: 'string',
-                  enum: ['bash_only', 'computer_use'],
-                  description: 'bash_only for CLI-only tasks (faster/cheaper), computer_use for GUI tasks.',
-                },
-              },
-              required: ['finalPlan', 'mode'],
-            },
-          },
-        ],
+        tools: [UPDATE_PLAN_TOOL, BEGIN_IMPLEMENTATION_TOOL],
         messages,
       });
 
@@ -167,9 +197,9 @@ export async function runPlanAgent(
         if (event.type === 'content_block_start') {
           if (event.content_block.type === 'tool_use') {
             inToolUse = true;
-            toolName = event.content_block.name;
-            toolUseId = event.content_block.id;
-            toolInputJson = '';
+            currentToolName = event.content_block.name;
+            currentToolId = event.content_block.id;
+            currentToolJson = '';
           }
         } else if (event.type === 'content_block_delta') {
           if (event.delta.type === 'text_delta') {
@@ -183,10 +213,11 @@ export async function runPlanAgent(
               timestamp: new Date().toISOString(),
             });
           } else if (event.delta.type === 'input_json_delta') {
-            toolInputJson += event.delta.partial_json;
+            currentToolJson += event.delta.partial_json;
           }
         } else if (event.type === 'content_block_stop') {
           if (inToolUse) {
+            toolCalls.push({ name: currentToolName, id: currentToolId, inputJson: currentToolJson });
             inToolUse = false;
           }
         }
@@ -196,40 +227,100 @@ export async function runPlanAgent(
       break;
     }
 
-    console.log(`[planAgent] Response done — text: ${fullText.length} chars, tool: ${toolName || 'none'}`);
+    console.log(`[planAgent] Response done — text: ${fullText.length} chars, tools: ${toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
-    // Append assistant turn to history
+    // Build assistant content blocks
     const assistantContent: Anthropic.ContentBlockParam[] = [];
     if (fullText) assistantContent.push({ type: 'text', text: fullText });
-    if (toolName) {
-      let toolInput: Record<string, string> = {};
-      try { toolInput = JSON.parse(toolInputJson); } catch { /* empty */ }
-      assistantContent.push({ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput });
 
-      // Handle begin_implementation
-      if (toolName === 'begin_implementation' && toolInput.finalPlan) {
-        messages.push({ role: 'assistant', content: assistantContent });
+    // Process tool calls
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    let shouldBreak = false;
 
-        // Acknowledge the tool call so conversation is valid
-        messages.push({
-          role: 'user',
-          content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'Implementation started.' }],
-        });
+    for (const tool of toolCalls) {
+      let toolInput: Record<string, unknown> = {};
+      try { toolInput = JSON.parse(tool.inputJson); } catch { /* empty */ }
+
+      assistantContent.push({ type: 'tool_use', id: tool.id, name: tool.name, input: toolInput });
+
+      if (tool.name === 'update_plan') {
+        planVersion++;
+        const rawSteps = (toolInput.steps as Array<Record<string, unknown>>) ?? [];
+        const steps: PlanStep[] = rawSteps.map((s, i) => ({
+          stepNumber: (s.stepNumber as number) ?? i + 1,
+          shortDescription: (s.shortDescription as string) ?? '',
+          detailedInstructions: (s.detailedInstructions as string) ?? '',
+          suggestedTools: (s.suggestedTools as string[]) ?? [],
+          status: 'pending' as const,
+        }));
 
         const mode = (toolInput.mode === 'bash_only' ? 'bash_only' : 'computer_use') as 'bash_only' | 'computer_use';
-        console.log(`[planAgent] Mode: ${mode}`);
-        wsHub.broadcast({ type: 'plan_complete', agentId, mode, timestamp: new Date().toISOString() });
-        registry.update(agentId, { task: toolInput.finalPlan });
+        currentPlan = { version: planVersion, mode, steps };
 
-        await onBeginImplementation(toolInput.finalPlan, mode);
+        registry.update(agentId, { plan: currentPlan });
+        wsHub.broadcast({
+          type: 'plan_update',
+          agentId,
+          plan: currentPlan,
+          timestamp: new Date().toISOString(),
+        });
+
+        console.log(`[planAgent] Plan v${planVersion} published (${steps.length} steps, mode: ${mode})`);
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: tool.id,
+          content: 'Plan published. Now respond with a brief intro sentence, then write <plan/> on its own line where the plan card should appear, then ask if they want to proceed or make changes. You MUST include the exact text <plan/> on its own line — the UI will render the plan component there.',
+        });
+
+      } else if (tool.name === 'begin_implementation') {
+        if (!currentPlan) {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: tool.id,
+            content: 'Error: No plan has been created yet. Please call update_plan first to propose a plan.',
+            is_error: true,
+          });
+          continue;
+        }
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: tool.id,
+          content: 'Implementation started.',
+        });
+
+        console.log(`[planAgent] Plan approved — beginning implementation (mode: ${currentPlan.mode})`);
+        wsHub.broadcast({ type: 'plan_approved', agentId, timestamp: new Date().toISOString() });
+
+        // Set task to a text summary for logging/backward compat
+        const taskSummary = currentPlan.steps.map(s => `${s.stepNumber}. ${s.detailedInstructions}`).join('\n');
+        registry.update(agentId, { task: taskSummary });
+
+        // Push assistant + tool result to messages for valid conversation state
+        messages.push({ role: 'assistant', content: assistantContent });
+        messages.push({ role: 'user', content: toolResults });
+
+        await onBeginImplementation(currentPlan);
+        shouldBreak = true;
         break;
       }
     }
+
+    if (shouldBreak) break;
+
+    // Append assistant turn to history
     if (assistantContent.length > 0) {
       messages.push({ role: 'assistant', content: assistantContent });
     }
 
-    // Wait for next user message (poll with 200ms interval, 5 min timeout)
+    // Append tool results if any
+    if (toolResults.length > 0) {
+      messages.push({ role: 'user', content: toolResults });
+      // After tool results, Claude needs to respond again (don't wait for user message)
+      continue;
+    }
+
+    // Wait for next user message
     console.log(`[planAgent] Waiting for user message for ${agentId}...`);
     const userMsg = await pollForMessage(agentId, 300_000);
     if (!userMsg) { console.log(`[planAgent] No message received — exiting`); break; }

@@ -17,10 +17,12 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         case action
         case thinking
         case output
+        case plan          // Inline plan checklist (current version)
+        case planRevised   // Collapsed "Plan revised" indicator (superseded version)
     }
 
     enum ActionKind: String, Codable {
-        case click, keyboard, bash, screenshot, editor, scroll, other
+        case click, keyboard, bash, screenshot, editor, scroll, wait, other
 
         var iconName: String {
             switch self {
@@ -30,6 +32,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
             case .screenshot: return "camera"
             case .editor:     return "pencil.line"
             case .scroll:     return "scroll"
+            case .wait:       return "hourglass"
             case .other:      return "gearshape"
             }
         }
@@ -42,6 +45,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
             case .screenshot: return .cyan
             case .editor:     return .orange
             case .scroll:     return .yellow
+            case .wait:       return .gray
             case .other:      return .gray
             }
         }
@@ -58,6 +62,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         if t.hasPrefix("scrolled") { return .scroll }
         if t.hasPrefix("view:") || t.hasPrefix("create:") || t.hasPrefix("str_replace:")
             || t.hasPrefix("insert:") || t.hasPrefix("undo_edit:") { return .editor }
+        if t.hasPrefix("waited") { return .wait }
         return .other
     }
 

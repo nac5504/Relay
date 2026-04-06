@@ -9,6 +9,22 @@ export type AgentStatus =
   | 'error'
   | 'stopped';
 
+export type PlanStepStatus = 'pending' | 'active' | 'completed' | 'failed';
+
+export interface PlanStep {
+  stepNumber: number;           // 1-indexed
+  shortDescription: string;     // One sentence for UI display
+  detailedInstructions: string; // Full instructions for execution agent
+  suggestedTools: string[];     // e.g. ["bash", "computer", "text_editor"]
+  status: PlanStepStatus;
+}
+
+export interface StructuredPlan {
+  version: number;              // Incremented on each revision
+  mode: 'bash_only' | 'computer_use';
+  steps: PlanStep[];
+}
+
 export interface ActionEvent {
   id: string;
   timestampMs: number;
@@ -33,6 +49,7 @@ export interface AgentState {
   messages: AnthropicMessage[];
   recordingProc: ChildProcess | null;
   error: string | null;
+  plan?: StructuredPlan;
 }
 
 export interface AnthropicMessage {

@@ -21,6 +21,12 @@ final class AgentStore {
         agents.first { $0.id == focusedAgentId }
     }
 
+    /// Messages filtered to the focused agent, or all messages if no agent is focused
+    var filteredMainChatMessages: [ChatMessage] {
+        guard let agent = focusedAgent else { return mainChatMessages }
+        return mainChatMessages.filter { $0.agentName == agent.agentName }
+    }
+
     // MARK: - Lifecycle
 
     func load() async {
@@ -57,8 +63,7 @@ final class AgentStore {
         if !agents.contains(where: { $0.id == agent.id }) {
             agents.append(agent)
         }
-        // Auto-focus so chat input routes to this agent
-        focusedAgentId = agent.id
+        // Stay on grid view — don't auto-focus the new agent
         mainChatMessages.append(ChatMessage(role: .assistant, text: "Spawning agent **\(agent.agentName)** — planning your task..."))
     }
 
@@ -129,13 +134,28 @@ final class AgentStore {
             } else {
                 mainChatMessages.append(ChatMessage(role: .assistant, text: "No agents to stop."))
             }
+        } else if text.hasPrefix("/focus") {
+            let targetName = text.dropFirst("/focus".count)
+                .trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "@", with: "")
+            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            if let agent = agents.first(where: { $0.agentName.lowercased() == targetName.lowercased() }) {
+                focusOnAgent(agent)
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "Focused on **\(agent.agentName)**."))
+            } else if !targetName.isEmpty {
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "No agent named \"\(targetName)\". Available: \(agents.map { "@\($0.agentName)" }.joined(separator: ", "))"))
+            } else {
+                // No target — unfocus back to grid
+                unfocus()
+                mainChatMessages.append(ChatMessage(role: .assistant, text: "Back to grid view."))
+            }
         } else if text.hasPrefix("@") {
             // @mention takes priority over focused/planning agent
             let parts = text.dropFirst().split(separator: " ", maxSplits: 1)
             let name = parts.first.map(String.init) ?? ""
             let message = parts.count > 1 ? String(parts[1]) : ""
             if let agent = agents.first(where: { $0.agentName.lowercased() == name.lowercased() }) {
-                mainChatMessages.append(ChatMessage(role: .user, text: text))
+                mainChatMessages.append(ChatMessage(role: .user, text: text, agentName: agent.agentName))
                 if !message.isEmpty {
                     try await sendMessage(to: agent, text: message)
                 }
@@ -145,11 +165,11 @@ final class AgentStore {
             }
         } else if let agent = focusedAgent {
             // Focused agent — route to it
-            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            mainChatMessages.append(ChatMessage(role: .user, text: text, agentName: agent.agentName))
             try await sendMessage(to: agent, text: text)
         } else if let planningAgent = agents.first(where: { $0.relayStatus.isPlanningPhase }) {
             // Planning agent fallback
-            mainChatMessages.append(ChatMessage(role: .user, text: text))
+            mainChatMessages.append(ChatMessage(role: .user, text: text, agentName: planningAgent.agentName))
             try await sendMessage(to: planningAgent, text: text)
         } else {
             mainChatMessages.append(ChatMessage(role: .user, text: text))
@@ -179,26 +199,51 @@ final class AgentStore {
 
         if streaming, role == "assistant",
            let last = agent.planMessages.last, last.role == .assistant, !last.isLoading {
-            agent.planMessages[agent.planMessages.count - 1] = ChatMessage(
+            let updated = ChatMessage(
                 id: last.id,
                 role: .assistant,
                 text: last.text + text,
                 timestamp: last.timestamp,
                 agentName: agent.agentName
             )
-            // Also update in main chat
+            agent.planMessages[agent.planMessages.count - 1] = updated
             if let mainIdx = mainChatMessages.lastIndex(where: { $0.id == last.id }) {
-                mainChatMessages[mainIdx] = agent.planMessages[agent.planMessages.count - 1]
+                mainChatMessages[mainIdx] = updated
+            }
+
+            // Check if accumulated text now contains <plan/> and we have a pending plan
+            if let pending = agent.pendingPlan, updated.text.contains("<plan/>") {
+                agent.planSnapshots[updated.id] = pending
+                agent.currentPlanMessageId = updated.id
+                agent.pendingPlan = nil
             }
         } else {
             let chatRole: ChatMessage.Role = role == "user" ? .user : .assistant
             let msg = ChatMessage(role: chatRole, text: text, agentName: role == "assistant" ? agent.agentName : nil)
             agent.planMessages.append(msg)
-            // Mirror assistant messages to main chat (user messages already added by processMainChatInput)
             if role != "user" {
                 mainChatMessages.append(msg)
             }
+
+            // Check non-streamed messages too
+            if role == "assistant", let pending = agent.pendingPlan, text.contains("<plan/>") {
+                agent.planSnapshots[msg.id] = pending
+                agent.currentPlanMessageId = msg.id
+                agent.pendingPlan = nil
+            }
         }
+    }
+
+    func handlePlanUpdate(agentId: String, steps: [PlanStep], version: Int) {
+        guard let agent = findAgent(id: agentId) else { return }
+
+        // Store pending plan — will be associated with the next assistant message containing <plan/>
+        agent.pendingPlan = (version: version, steps: steps)
+        agent.planSteps = steps
+        if version > agent.planVersion {
+            agent.planRevisionCount += 1
+        }
+        agent.planVersion = version
     }
 
     func appendChatMessage(agentId: String, role: String, text: String) {

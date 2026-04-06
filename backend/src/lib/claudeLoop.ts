@@ -13,7 +13,7 @@ import * as wsHub from './wsHub';
 import * as docker from './dockerManager';
 import { getApiKey } from './config';
 import * as outputManager from './outputManager';
-import { ComputerToolInput, AnthropicMessage } from './types';
+import { ComputerToolInput, AnthropicMessage, StructuredPlan } from './types';
 
 const MODEL = 'claude-sonnet-4-6';
 const MAX_TOKENS = 4096;
@@ -46,46 +46,42 @@ function describeAction(toolInput: ComputerToolInput): string {
   }
 }
 
-function parsePlanSteps(planText: string): string[] {
-  const lines = planText.split('\n');
-  const steps: string[] = [];
-  for (const line of lines) {
-    const match = line.match(/^\s*(\d+)\.\s+(.+)/);
-    if (match) steps.push(match[2].trim());
-  }
-  return steps;
+function buildStepsPrompt(plan: StructuredPlan): string {
+  return plan.steps.map(s =>
+    `${s.stepNumber}. ${s.detailedInstructions}\n   Suggested tools: ${s.suggestedTools.join(', ')}`
+  ).join('\n\n');
 }
 
-function detectCompletedSteps(text: string, steps: string[], alreadyCompleted: Set<number>): number[] {
-  const lower = text.toLowerCase();
-  const completed: number[] = [];
+function handleStepComplete(agentId: string, plan: StructuredPlan, stepNumber: number): string {
+  const stepIdx = plan.steps.findIndex(s => s.stepNumber === stepNumber);
+  if (stepIdx === -1) return `Step ${stepNumber} not found in plan.`;
 
-  // Look for "step N" references with positive language
-  const stepRefs = lower.matchAll(/step\s+(\d+)/g);
-  for (const m of stepRefs) {
-    const stepNum = parseInt(m[1], 10) - 1; // 0-indexed
-    if (stepNum >= 0 && stepNum < steps.length && !alreadyCompleted.has(stepNum)) {
-      // Check for positive evaluation nearby
-      const pos = m.index!;
-      const context = lower.slice(pos, pos + 200);
-      if (context.match(/correct|done|complete|success|achiev|verified|confirm|moved on|moving on|proceed/)) {
-        completed.push(stepNum);
-      }
-    }
+  plan.steps[stepIdx].status = 'completed';
+
+  // Set next step to active
+  const nextStep = plan.steps.find(s => s.status === 'pending');
+  if (nextStep) nextStep.status = 'active';
+
+  registry.update(agentId, { plan });
+  wsHub.broadcast({
+    type: 'step_update',
+    agentId,
+    stepNumber,
+    status: 'completed',
+    timestamp: new Date().toISOString(),
+  });
+
+  if (nextStep) {
+    wsHub.broadcast({
+      type: 'step_update',
+      agentId,
+      stepNumber: nextStep.stepNumber,
+      status: 'active',
+      timestamp: new Date().toISOString(),
+    });
   }
 
-  // Also detect "I have evaluated" pattern
-  if (lower.includes('evaluated') && lower.match(/correct|success|done|moving/)) {
-    const stepMatch = lower.match(/step\s+(\d+)/);
-    if (stepMatch) {
-      const idx = parseInt(stepMatch[1], 10) - 1;
-      if (idx >= 0 && idx < steps.length && !alreadyCompleted.has(idx) && !completed.includes(idx)) {
-        completed.push(idx);
-      }
-    }
-  }
-
-  return completed;
+  return `Step ${stepNumber} marked as completed.${nextStep ? ` Proceeding to step ${nextStep.stepNumber}.` : ' All steps completed.'}`;
 }
 
 export async function runAgentLoop(agentId: string): Promise<void> {
@@ -101,8 +97,14 @@ export async function runAgentLoop(agentId: string): Promise<void> {
   try {
     const initScreenshot = await docker.screenshot(containerName);
 
-    // System prompt per docs recommendation for reliable step-by-step execution
+    // Read structured plan from agent state
+    const plan = agent.plan;
+
+    // Build system prompt with structured steps
+    const stepsSection = plan ? `\n## Steps\n${buildStepsPrompt(plan)}\n\nAfter completing each step, you MUST call report_step_complete with the step number before proceeding to the next step.` : '';
+
     const systemPrompt = `You are controlling a computer to complete the following task: ${agent.task}
+${stepsSection}
 
 ## Opening a browser
 To open ANY website, use this exact bash command:
@@ -115,7 +117,7 @@ Then wait 3 seconds and take a screenshot. The browser is already logged into th
   DISPLAY=:1 xterm &
 
 ## Workflow
-After each step, take a screenshot and evaluate the result. Be concise. If correct, move on. If not, try once more.
+After each step, take a screenshot and evaluate the result. Be concise. If correct, call report_step_complete and move on. If not, try once more.
 
 ## Output files
 When done, write file paths to /tmp/relay_outputs.txt:
@@ -134,12 +136,17 @@ If you need clarification, say "Waiting for input:" followed by your question an
     registry.update(agentId, { status: 'working', messages });
     wsHub.broadcast({ type: 'agent_update', agentId, status: 'working', cost: agent.cost });
 
-    // Parse plan into numbered steps and broadcast task list
-    const planSteps = parsePlanSteps(agent.task);
-    if (planSteps.length > 0) {
-      wsHub.broadcast({ type: 'task_list', agentId, steps: planSteps });
+    // Initialize step tracking from structured plan
+    if (plan && plan.steps.length > 0) {
+      plan.steps[0].status = 'active';
+      registry.update(agentId, { plan });
+      wsHub.broadcast({
+        type: 'plan_update',
+        agentId,
+        plan,
+        timestamp: new Date().toISOString(),
+      });
     }
-    const completedSteps = new Set<number>();
 
     while (iterations < MAX_ITERATIONS) {
       iterations++;
@@ -182,6 +189,19 @@ If you need clarification, say "Waiting for input:" followed by your question an
               type: 'bash_20250124',
               name: 'bash',
             } satisfies BetaToolBash20250124,
+          ...(plan ? [{
+            type: 'custom' as const,
+            name: 'report_step_complete',
+            description: 'Report that you have completed a step in the plan. Call this after finishing each step before moving to the next.',
+            input_schema: {
+              type: 'object' as const,
+              properties: {
+                stepNumber: { type: 'number', description: 'The step number (1-indexed) that was completed.' },
+                summary: { type: 'string', description: 'Brief summary of what was done.' },
+              },
+              required: ['stepNumber'],
+            },
+          }] : []),
           ] as BetaToolUnion[],
           messages,
           betas: [BETA_HEADER],
@@ -200,19 +220,10 @@ If you need clarification, say "Waiting for input:" followed by your question an
 
       messages.push({ role: 'assistant', content: response.content as AnthropicMessage['content'] });
 
-      // Broadcast text blocks; detect step completions and waiting-for-input state
+      // Broadcast text blocks and detect waiting-for-input state
       for (const block of response.content) {
         if (block.type === 'text' && block.text.trim()) {
           wsHub.broadcast({ type: 'chat_message', agentId, role: 'assistant', text: block.text, timestamp: new Date().toISOString() });
-
-          // Detect step completions from Claude's evaluation text
-          if (planSteps.length > 0) {
-            const newlyCompleted = detectCompletedSteps(block.text, planSteps, completedSteps);
-            for (const stepIdx of newlyCompleted) {
-              completedSteps.add(stepIdx);
-              wsHub.broadcast({ type: 'task_update', agentId, stepIndex: stepIdx, completed: true });
-            }
-          }
 
           if (response.stop_reason === 'end_turn') {
             const lower = block.text.toLowerCase();
@@ -314,6 +325,13 @@ If you need clarification, say "Waiting for input:" followed by your question an
 
           wsHub.broadcast({ type: 'action', agentId, event: { id: uuidv4(), timestampMs: actionStartMs, actionType: 'text_editor', description: `${input.command}: ${input.path}`, coordinates: null } });
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: output }] });
+
+        } else if (block.name === 'report_step_complete' && plan) {
+          const input = block.input as { stepNumber: number; summary?: string };
+          console.log(`[loop:${agentId.slice(0,8)}] ✅ Step ${input.stepNumber} completed${input.summary ? `: ${input.summary.slice(0, 80)}` : ''}`);
+
+          const resultText = handleStepComplete(agentId, plan, input.stepNumber);
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: [{ type: 'text', text: resultText }] });
         }
       }
 
